@@ -32,7 +32,7 @@ cbtcn_params = {
         'nhidden'   :   128,
         'char_dim'  :   25,
         'dropout'   :   0.4,
-        'word2vec'  :   'data/word2vec_glove.txt',
+        'word2vec'  :   '/scratch/s161027/ga_reader_data/word2vec_glove.txt',
         'train_emb' :   0,
         'use_feat'  :   1,
         }
@@ -41,7 +41,7 @@ wdw_params = {
         'nhidden'   :   128,
         'char_dim'  :   25,
         'dropout'   :   0.3,
-        'word2vec'  :   'data/word2vec_glove.txt',
+        'word2vec'  :   '/scratch/s161027/ga_reader_data/word2vec_glove.txt',
         'train_emb' :   0,
         'use_feat'  :   1,
         }
@@ -50,7 +50,7 @@ cnn_params = {
         'nhidden'   :   256,
         'char_dim'  :   0,
         'dropout'   :   0.2,
-        'word2vec'  :   'data/word2vec_glove.txt',
+        'word2vec'  :   '/scratch/s161027/ga_reader_data/word2vec_glove.txt',
         'train_emb' :   1,
         'use_feat'  :   0,
         }
@@ -59,7 +59,7 @@ dailymail_params = {
         'nhidden'   :   256,
         'char_dim'  :   0,
         'dropout'   :   0.1,
-        'word2vec'  :   'data/word2vec_glove.txt',
+        'word2vec'  :   '/scratch/s161027/ga_reader_data/word2vec_glove.txt',
         'train_emb' :   1,
         'use_feat'  :   0,
         }
@@ -68,7 +68,7 @@ cbtne_params = {
         'nhidden'   :   128,
         'char_dim'  :   25,
         'dropout'   :   0.4,
-        'word2vec'  :   'data/word2vec_glove.txt',
+        'word2vec'  :   '/scratch/s161027/ga_reader_data/word2vec_glove.txt',
         'train_emb' :   0,
         'use_feat'  :   1,
         }
