@@ -1,13 +1,35 @@
-import os
-# import logging
-import numpy as np
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
 
+from __future__ import division
+from __future__ import print_function
+
+
+import numpy as np
+import sys
+import os
+import logging
 EMBED_DIM = 128
 
 
+def show_data(seqs, inv_dict):
+    def inv_vocab(x):
+        return inv_dict[x]
+    tmp = ""
+    for seq in seqs:
+        if isinstance(seq, np.int32):
+            tmp += inv_dict[seq] + ' '
+        else:
+            print(' '.join(list(map(inv_vocab, seq))))
+    if tmp != "":
+        print(tmp)
+
+
 def show_predicted_vs_ground_truth(probs, a, inv_dict):
-    predicted_ans = map(lambda i:inv_dict[i], list(np.argmax(probs, axis=1)))
-    true_ans = map(lambda i:inv_dict[i], list(a))
+    predicted_ans = list(map(
+        lambda i: inv_dict[i], list(np.argmax(probs, axis=1))))
+    true_ans = list(map(
+        lambda i: inv_dict[i], list(a)))
     print(zip(predicted_ans, true_ans))
 
 
@@ -15,8 +37,8 @@ def count_candidates(probs, c, m_c):
     hits = 0
     predicted_ans = list(np.argmax(probs, axis=1))
     for i, x in enumerate(predicted_ans):
-        for j, y in enumerate(c[i,:]):
-            if x == y and m_c[i,j] > 0:
+        for j, y in enumerate(c[i, :]):
+            if x == y and m_c[i, j] > 0:
                 hits += 1
                 break
     return hits
@@ -56,7 +78,7 @@ def load_word2vec_embeddings(dictionary, vocab_embed_file):
         if w in vocab_embed:
             W[i, :] = vocab_embed[w]
             n += 1
-    print("{}/{} vocabs are initialized with word2vec embeddings."
+    logging.info("{}/{} vocabs are initialized with word2vec embeddings."
                  .format(n, vocab_size))
     return W, embed_dim
 

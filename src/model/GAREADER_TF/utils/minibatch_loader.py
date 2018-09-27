@@ -1,11 +1,17 @@
-import glob
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+from __future__ import division
+from __future__ import print_function
+# from builtins import range
+
+
 import numpy as np
 import random
-
 MAX_WORD_LEN = 10
 
 
-class MiniBatchLoader:
+class minibatch_loader:
     def __init__(self, questions, batch_size, shuffle=True, sample=1.0):
         self.batch_size = batch_size
         if sample == 1.0:
@@ -33,11 +39,9 @@ class MiniBatchLoader:
             key: document length (rounded to the powers of two)
             value: indexes of questions with document length equal to key
         """
-
         # round the input to the nearest power of two
         def round_to_power(x):
             return 2 ** (int(np.log2(x - 1)) + 1)
-
         doc_len = list(map(lambda x: round_to_power(len(x[0])), questions))
         bins = {}
         for i, l in enumerate(doc_len):
@@ -66,7 +70,7 @@ class MiniBatchLoader:
             k = n / self.batch_size if \
                 n % self.batch_size == 0 else n / self.batch_size + 1
             ixs_list = [(ixs[self.batch_size * i:
-                             min(n, self.batch_size * (i + 1))], l)
+                        min(n, self.batch_size * (i + 1))], l)
                         for i in range(int(k))]
             self.batch_pool += ixs_list
 
@@ -98,7 +102,7 @@ class MiniBatchLoader:
             dtype='int16')
         # position of cloze in query
         cl = np.zeros(
-            (curr_batch_size,),
+            (curr_batch_size, ),
             dtype='int32')
         # document word mask
         m_dw = np.zeros(
@@ -113,7 +117,7 @@ class MiniBatchLoader:
             (curr_batch_size, curr_max_doc_len),
             dtype='int32')
         # correct answer
-        a = np.zeros((curr_batch_size,), dtype='int32')
+        a = np.zeros((curr_batch_size, ), dtype='int32')
         fnames = [''] * curr_batch_size
 
         types = {}
@@ -121,7 +125,7 @@ class MiniBatchLoader:
         for n, ix in enumerate(ixs):
 
             doc_w, qry_w, ans, cand, doc_c, \
-            qry_c, cloze, fname = self.questions[ix]
+                qry_c, cloze, fname = self.questions[ix]
 
             # document, query and candidates
             dw[n, : len(doc_w)] = np.array(doc_w)
@@ -141,7 +145,7 @@ class MiniBatchLoader:
 
             # search candidates in doc
             for it, cc in enumerate(cand):
-                index = [ii for ii in range(len(doc_w)) if doc_w[ii] == cc] # Changed if statement because cc was not iterable
+                index = [ii for ii in range(len(doc_w)) if doc_w[ii] in cc]
                 m_c[n, index] = 1
                 c[n, index, it] = 1
                 if ans == cc:
@@ -181,4 +185,3 @@ class MiniBatchLoader:
         self.ptr += 1
 
         return dw, dt, qw, qt, a, m_dw, m_qw, tt, tm, c, m_c, cl, fnames
-

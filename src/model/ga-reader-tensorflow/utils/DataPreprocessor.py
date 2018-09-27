@@ -3,7 +3,7 @@ import glob
 import os
 import sys
 
-from config import MAX_WORD_LEN
+MAX_WORD_LEN = 10
 
 SYMB_BEGIN = "@begin"
 SYMB_END = "@end"
@@ -18,11 +18,11 @@ class Data:
         self.vocab_size = len(dictionary[0])
         self.num_chars = len(dictionary[1])
         self.num_entities = num_entities
-        self.inv_dictionary = {v:k for k,v in dictionary[0].items()}
+        self.inv_dictionary = {v: k for k, v in dictionary[0].items()}
 
 class DataPreprocessor:
 
-    def preprocess(self, question_dir, no_training_set=False, use_chars=True):
+    def preprocess(self, question_dir, max_example=None, no_training_set=False, use_chars=True):
         """
         preprocess all data into a standalone Data object.
         the training set will be left out (to save debugging time) when no_training_set is True.
@@ -35,11 +35,11 @@ class DataPreprocessor:
             training = None
         else:
             print("preparing training data ...")
-            training = self.parse_all_files(question_dir + "/training", dictionary, use_chars)
+            training = self.parse_all_files(question_dir + "/training", dictionary, max_example, use_chars)
         print("preparing validation data ...")
-        validation = self.parse_all_files(question_dir + "/validation", dictionary, use_chars)
+        validation = self.parse_all_files(question_dir + "/validation", dictionary, max_example, use_chars)
         print("preparing test data ...")
-        test = self.parse_all_files(question_dir + "/test", dictionary, use_chars)
+        test = self.parse_all_files(question_dir + "/test", dictionary, max_example, use_chars)
 
         data = Data(dictionary, num_entities, training, validation, test)
         return data
@@ -146,12 +146,12 @@ class DataPreprocessor:
 
         return doc_words, qry_words, ans, cand, doc_chars, qry_chars, cloze
 
-    def parse_all_files(self, directory, dictionary, use_chars):
+    def parse_all_files(self, directory, dictionary, max_example, use_chars):
         """
         parse all files under the given directory into a list of questions,
         where each element is in the form of (document, query, answer, filename)
         """
-        all_files = glob.glob(directory + '/*.question')
+        all_files = glob.glob(directory + '/*.question' [: max_example])
         questions = [self.parse_one_file(f, dictionary, use_chars) + (f,) for f in all_files]
         return questions
 
