@@ -142,7 +142,7 @@ class DataPreprocessor:
         # ans = map(lambda w:w_dict.get(w,0), ans_raw.split())
         ans = w_dict.get(ans_raw,0)
         # cand = [map(lambda w:w_dict.get(w,0), c) for c in cand_raw]
-        cand = [w_dict.get(w[0],0) for w in cand_raw]
+        cand = [w_dict.get(w[0], 0) for w in cand_raw]
 
         return doc_words, qry_words, ans, cand, doc_chars, qry_chars, cloze
 

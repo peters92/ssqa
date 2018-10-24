@@ -4,7 +4,10 @@ import time
 import os
 import logging
 from tqdm import trange
-from utils.model_helper import *
+from utils.model_helper import gated_attention,\
+                               pairwise_interaction,\
+                               attention_sum,\
+                               crossentropy
 from utils.Helpers import prepare_input
 
 MAX_WORD_LEN = 10
@@ -100,7 +103,7 @@ class GAReader:
             if embed_init is None:
                 word_embedding = tf.get_variable(
                     "word_embedding", [self.vocab_size, self.embed_dim],
-                    initializer=tf.glorot_normal_initializer(seed, tf.float32),  # TODO: change initialization to Glorot/Xavier
+                    initializer=tf.glorot_normal_initializer(seed, tf.float32),
                     trainable=self.train_emb)
             else:
                 word_embedding = tf.Variable(embed_init, trainable=self.train_emb,
@@ -162,7 +165,7 @@ class GAReader:
                 (fw_doc_states, bk_doc_states), _ = \
                     tf.nn.bidirectional_dynamic_rnn(
                         fw_doc, bk_doc, doc_embed, sequence_length=seq_length,
-                        dtype=tf.float32, scope="layer_{}_doc_rnn".format(i))
+                        dtype=tf.float32, scope="layer_{}_doc_rnn".format(i)) # TODO: turn off scope for cleaner tensorboard?
                 doc_bi_embed = tf.concat([fw_doc_states, bk_doc_states], axis=2)
 
             # QUERY
@@ -213,6 +216,7 @@ class GAReader:
             self.pred = attention_sum(
                 doc_embed_final, qry_embed_final, self.cand,
                 self.cloze, self.cand_mask)
+            # Making the prediction by taking the max. probability among candidates
             self.pred_ans = tf.cast(tf.argmax(self.pred, axis=1), tf.int32)
 
         with tf.name_scope("Loss"):
@@ -226,6 +230,7 @@ class GAReader:
                 tf.cast(tf.equal(self.answer, self.pred_ans), tf.float32))
             self.acc_metric, self.acc_metric_update = tf.metrics.accuracy(
                 self.answer, self.pred_ans)
+
         vars_list = tf.trainable_variables()
 
         with tf.name_scope("Train"):

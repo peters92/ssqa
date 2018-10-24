@@ -141,11 +141,11 @@ class MiniBatchLoader:
 
             # search candidates in doc
             for it, cc in enumerate(cand):
-                index = [ii for ii in range(len(doc_w)) if doc_w[ii] == cc] # Changed if statement because cc was not iterable
+                index = [ii for ii in range(len(doc_w)) if doc_w[ii] == cc]  # Fixed because cc was not iterable
                 m_c[n, index] = 1
                 c[n, index, it] = 1
                 if ans == cc:
-                    a[n] = it  # answer
+                    a[n] = it  # answer index among candidates
 
             cl[n] = cloze
             fnames[n] = fname

@@ -107,7 +107,7 @@ def train(args):
         saver = tf.train.Saver(tf.global_variables())
     else:
         model = GAReader(args.n_layers, data.vocab_size, data.num_chars,
-                         args.n_hidden, 100, args.train_emb,
+                         args.n_hidden, 100, args.train_emb,  # TODO: fix embed dim to be based on variable?
                          args.char_dim, args.use_feat, args.gating_fn)
     # Tensorboard
 
