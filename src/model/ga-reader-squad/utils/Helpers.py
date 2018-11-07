@@ -57,7 +57,7 @@ def load_word2vec_embeddings(dictionary, vocab_embed_file):
             W[i, :] = vocab_embed[w]
             n += 1
     print("{}/{} vocabs are initialized with word2vec embeddings."
-                 .format(n, vocab_size))
+          .format(n, vocab_size))
     return W, embed_dim
 
 

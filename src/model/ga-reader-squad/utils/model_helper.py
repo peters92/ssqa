@@ -7,14 +7,6 @@ from __future__ import print_function
 import tensorflow as tf
 
 
-def tfconcat(t1, t2):
-    return tf.concat([t1, t2], axis=2)
-
-
-def tfsum(t1, t2):
-    return t1 + t2
-
-
 def gated_attention(doc, qry, inter, mask, gating_fn='tf.multiply', name="Gated_Attention_Layer"):
     # doc: B x N x D
     # qry: B x Q x D
@@ -31,7 +23,7 @@ def gated_attention(doc, qry, inter, mask, gating_fn='tf.multiply', name="Gated_
         # Calculating the actual (doc)token-specific representation of the query
         q_rep = tf.matmul(alphas_r, qry)  # B x N x D
 
-    return eval(gating_fn)(doc, q_rep)
+        return eval(gating_fn)(doc, q_rep)
 
 
 def pairwise_interaction(doc, qry, name="Pairwise_Interaction_Layer"):
@@ -40,10 +32,34 @@ def pairwise_interaction(doc, qry, name="Pairwise_Interaction_Layer"):
     with tf.name_scope(name):
         shuffled = tf.transpose(qry, perm=[0, 2, 1])  # B x D x Q
 
-    return tf.matmul(doc, shuffled)  # B x N x Q
+        return tf.matmul(doc, shuffled)  # B x N x Q
 
 
-def attention_sum(doc, qry, cand, cloze, cand_mask=None, name="Attention_Sum_Layer"):
+def attention_sum(inter, n_hidden_dense, name="Attention_Sum_Layer"):
+    # For span-style QA
+    # doc: B x N x D
+    # qry: B x Q x D
+    # After pairwise interaction the doc/qry interaction is passed through
+    # two fully connected layers with softmax to predict the start and end indices
+    with tf.name_scope(name):
+        # Old, interaction matrix calculated inside the method
+        # qry_perm = tf.transpose(qry, perm=[0, 2, 1])  # B x D x Q
+        # p = tf.matmul(doc, qry_perm)  # B x N x Q
+
+        start_logits = tf.layers.dense(inputs=inter, units=n_hidden_dense, activation=tf.nn.relu)
+        end_logits = tf.layers.dense(inputs=inter, units=n_hidden_dense, activation=tf.nn.relu)
+
+        start_softmax = tf.nn.softmax(start_logits, dim=0)
+        end_softmax = tf.nn.softmax(end_logits, dim=0)
+
+        start_pred = tf.reduce_mean(start_softmax, axis=1)
+        end_pred = tf.reduce_mean(end_softmax, axis=1)
+
+        return start_pred, end_pred
+
+
+def attention_sum_cloze(doc, qry, cand, cloze, cand_mask=None, name="Attention_Sum_Layer"):
+    # For cloze-style QA
     # doc: B x N x D
     # qry: B x Q x D
     # cand: B x N x C
@@ -71,8 +87,8 @@ def attention_sum(doc, qry, cand, cloze, cand_mask=None, name="Attention_Sum_Lay
     # the candidates. Also keeps them in their original order 1 to C (max_num_cand)
     # Technically allows a candidate to show up multiple times in the doc, and
     # adds up the respective softmax values for that candidate.
-    return tf.squeeze(
-        tf.matmul(pm, tf.cast(cand, tf.float32)), axis=1)  # B x C
+        return tf.squeeze(
+            tf.matmul(pm, tf.cast(cand, tf.float32)), axis=1)  # B x C
 
 
 def crossentropy(pred, target, name="Cross_Entropy"):
@@ -82,8 +98,18 @@ def crossentropy(pred, target, name="Cross_Entropy"):
     target: B x 1 - The index of the answer among the candidates
     """
     with tf.name_scope(name):
+        # Masking out zero columns
+        intermediate_tensor1 = tf.reduce_sum(tf.abs(pred), axis=0)
+        zero_vector = tf.zeros(shape=(1, 1))
+
+        mask_columns = tf.squeeze(tf.not_equal(intermediate_tensor1, zero_vector))
+        mask_columns.set_shape([None])
+        pred = tf.boolean_mask(pred, mask_columns, axis=1)
+
         idx = tf.expand_dims(tf.range(tf.shape(target)[0]), 1)
         idx = tf.concat([idx, tf.expand_dims(target, 1)], axis=-1)
+
         logit = tf.gather_nd(pred, idx)  # B x 1
 
-    return - tf.log(logit)
+        return - tf.log(logit)
+
