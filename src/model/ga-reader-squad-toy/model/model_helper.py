@@ -6,6 +6,11 @@ from __future__ import print_function
 
 import tensorflow as tf
 
+# Dimensions:
+# B - Batch size
+# N - max. document length in batch
+# Q - max. query length in batch
+# D - dimensionality of embeddings
 
 def gated_attention(doc, qry, inter, mask, gating_fn='tf.multiply', name="Gated_Attention_Layer"):
     # doc: B x N x D
@@ -37,23 +42,37 @@ def pairwise_interaction(doc, qry, name="Pairwise_Interaction_Layer"):
 
 def attention_sum(inter, n_hidden_dense, name="Attention_Sum_Layer"):
     # For span-style QA
-    # doc: B x N x D
-    # qry: B x Q x D
-    # After pairwise interaction the doc/qry interaction is passed through
+    # The pairwise interaction matrix is passed through
     # two fully connected layers with softmax to predict the start and end indices
-    with tf.name_scope(name):
-        # Old, interaction matrix calculated inside the method
-        # qry_perm = tf.transpose(qry, perm=[0, 2, 1])  # B x D x Q
-        # p = tf.matmul(doc, qry_perm)  # B x N x Q
 
+    # Input:
+    # inter - B x N x Q - pairwise interaction matrix
+    # Outputs:
+    # start_pred - B x N
+    # end_pred   - B x N
+    # Probabilites over document words being the answer start- or end-index
+
+    with tf.name_scope(name):
+        # TODO: Make these dense layers dynamic in shape? Add dropout? Different activation?
         start_logits = tf.layers.dense(inputs=inter, units=n_hidden_dense, activation=tf.nn.relu)
         end_logits = tf.layers.dense(inputs=inter, units=n_hidden_dense, activation=tf.nn.relu)
 
-        start_softmax = tf.nn.softmax(start_logits, dim=0)
-        end_softmax = tf.nn.softmax(end_logits, dim=0)
+        # Debug, Calculate mean, but ignore zero columns
+        # intermediate_tensor1 = tf.reduce_sum(tf.abs(start_logits), axis=1)
+        # zero_vector = tf.zeros(shape=(1, 1))
+        #
+        # mask_columns = tf.squeeze(tf.not_equal(intermediate_tensor1, zero_vector))
+        # mask_columns.set_shape([None, ])
+        # # Mask both start and end. Since they have the same zero columns.
+        # start_logits = tf.boolean_mask(start_logits, mask_columns, axis=2)
+        # end_logits = tf.boolean_mask(end_logits, mask_columns, axis=2)
+        # End of debug
 
-        start_pred = tf.reduce_mean(start_softmax, axis=1)
-        end_pred = tf.reduce_mean(end_softmax, axis=1)
+        start_softmax = tf.nn.softmax(start_logits, axis=1)
+        end_softmax = tf.nn.softmax(end_logits, axis=1)
+
+        start_pred = tf.reduce_mean(start_softmax, axis=2)
+        end_pred = tf.reduce_mean(end_softmax, axis=2)
 
         return start_pred, end_pred
 
@@ -93,23 +112,23 @@ def attention_sum_cloze(doc, qry, cand, cloze, cand_mask=None, name="Attention_S
 
 def crossentropy(pred, target, name="Cross_Entropy"):
     """
+    Cloze-style:
     pred: B x C   - Vector of probabilities of a candidate being the right
     answer among all candidates
     target: B x 1 - The index of the answer among the candidates
+
+    Span-style:
+    pred: B x N - Vectors of probabilities of a document word being the answer start or end.
+    target: B x 1 - The true index of either the answer start or end depending on input
     """
     with tf.name_scope(name):
-        # Masking out zero columns
-        intermediate_tensor1 = tf.reduce_sum(tf.abs(pred), axis=0)
-        zero_vector = tf.zeros(shape=(1, 1))
-
-        mask_columns = tf.squeeze(tf.not_equal(intermediate_tensor1, zero_vector))
-        mask_columns.set_shape([None])
-        pred = tf.boolean_mask(pred, mask_columns, axis=1)
-
+        # Create vector of batch index concatenated with true index of answer
         idx = tf.expand_dims(tf.range(tf.shape(target)[0]), 1)
         idx = tf.concat([idx, tf.expand_dims(target, 1)], axis=-1)
 
-        logit = tf.gather_nd(pred, idx)  # B x 1
+        # Gather the probability values at the correct answer's index in the prediction
+        prob = tf.gather_nd(pred, idx)  # B x 1
 
-        return - tf.log(logit)
+        # Return the negative logarithm of the probability
+        return - tf.log(prob)
 

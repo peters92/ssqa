@@ -1,23 +1,18 @@
-from utils.DataPreprocessor import DataPreprocessor
-from utils.MiniBatchLoader import MiniBatchLoader
+from utils.SquadAnalysis import Analyser
 
-dp = DataPreprocessor()
+analyser = Analyser()
 
-data = dp.preprocess(
-    question_dir="/scratch/s161027/ga_reader_data/squad", no_training_set=True,
-        use_cloze_style=False, only_test_run=True)
+text_outputs, batch_number = analyser.print_predictions(max_example=10, epoch=1)
 
-test_batch_loader = MiniBatchLoader(
-        data.test, 32, shuffle=False, use_cloze_style=False)
-index = 0
-for samples in test_batch_loader:
-    dw, dt, qw, qt, a, m_dw, m_qw, tt, tm, fnames = samples
+for j in range(batch_number):
+        doc = text_outputs[j][0][0]
+        qry = text_outputs[j][1]
+        ans = text_outputs[j][2]
+        pred_ans = text_outputs[j][3]
 
-    doc_len = len(dw)
-    a_len = len(a)
-    if not doc_len == a_len:
-        print("something's wrong at index: {}".format(index))
-    # if index == 0:
-    #     print("Doc words: {}".format(dw))
-    #     print("Answer: {}\nAnswer shape: {}".format(a, a.shape))
-    index += 1
+        print(100*"-")
+        print("\n\nParagraph {}: '{}'".format(j, doc))
+        for i in range(len(qry)):
+            print("\nQuery {}: '{}'".format(i, qry[i]))
+            print("\nGround Truth {}: '{}'".format(i, ans[i]))
+            print("\nPredicted answer {}: '{}'".format(i, pred_ans[i]))

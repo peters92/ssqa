@@ -4,7 +4,7 @@ import time
 import os
 import logging
 from tqdm import trange
-from utils.ModelHelper import gated_attention,\
+from model.model_helper import gated_attention,\
                                pairwise_interaction,\
                                attention_sum,\
                                attention_sum_cloze, \
@@ -26,8 +26,8 @@ class GAReader:
         self.char_dim = char_dim
         self.n_chars = n_chars
         self.use_feat = use_feat
-        self.gating_fn = gating_fn
         self.save_attn = save_attn
+        self.gating_fn = gating_fn
         self.vocab_size = vocab_size
         self.use_chars = self.char_dim != 0
         self.use_cloze_style = use_cloze_style
@@ -51,8 +51,6 @@ class GAReader:
         self.attentions = None
 
         self.pred = None
-        self.start_probs = None
-        self.end_probs = None
         self.loss = None
         self.pred_ans = None
         self.test = None
@@ -61,11 +59,7 @@ class GAReader:
 
         self.acc_metric = None
         self.acc_metric_update = None
-        self.valid_acc_metric = None
-        self.valid_acc_metric_update = None
-        self.loss_summ = None
-        self.acc_summ = None
-        self.valid_acc_summ = None
+        self.acc_sum = None
 
         self.merged_summary = None
 
@@ -90,9 +84,6 @@ class GAReader:
                 # Answer looks like -> Batch_size * [answer_start_index, answer_end_index]
                 self.answer = tf.placeholder(
                     tf.int32, [None, 2], name="answer")
-                self.pred_ans = tf.placeholder(tf.int32, [None, 2], name="predicted_answer")
-                self.start_probs = tf.placeholder(tf.float32, [None, None], name="answer_start_probs")
-                self.end_probs = tf.placeholder(tf.float32, [None, None], name="answer_end_probs")
 
             # word mask TODO: dtype could be changed to int8 or bool
             self.doc_mask = tf.placeholder(
@@ -140,34 +131,34 @@ class GAReader:
             feat_embed = tf.nn.embedding_lookup(
                 feature_embedding, self.feat, name="feature_embedding")
 
-        # char embedding
-        if self.use_chars:
+            # char embedding
             with tf.name_scope("Character_Embeddings"):
-                char_embedding = tf.get_variable(
-                    "char_embedding", [self.n_chars, self.char_dim],
-                    initializer=tf.random_normal_initializer(stddev=0.1))
-                token_embed = tf.nn.embedding_lookup(char_embedding, self.token)
-                fw_gru = GRU(self.char_dim)
-                bk_gru = GRU(self.char_dim)
-                # fw_states/bk_states: [batch_size, gru_size]
-                # only use final state
-                seq_length = tf.reduce_sum(self.char_mask, axis=1)
-                _, (fw_final_state, bk_final_state) = \
-                    tf.nn.bidirectional_dynamic_rnn(
-                        fw_gru, bk_gru, token_embed, sequence_length=seq_length,
-                        dtype=tf.float32, scope="char_rnn")
-                fw_embed = tf.layers.dense(
-                    fw_final_state, self.embed_dim // 2)
-                bk_embed = tf.layers.dense(
-                    bk_final_state, self.embed_dim // 2)
-                merge_embed = fw_embed + bk_embed
-                doc_char_embed = tf.nn.embedding_lookup(
-                    merge_embed, self.doc_char, name="doc_char_embedding")
-                qry_char_embed = tf.nn.embedding_lookup(
-                    merge_embed, self.qry_char, name="query_char_embedding")
+                if self.use_chars:
+                    char_embedding = tf.get_variable(
+                        "char_embedding", [self.n_chars, self.char_dim],
+                        initializer=tf.random_normal_initializer(stddev=0.1))
+                    token_embed = tf.nn.embedding_lookup(char_embedding, self.token)
+                    fw_gru = GRU(self.char_dim)
+                    bk_gru = GRU(self.char_dim)
+                    # fw_states/bk_states: [batch_size, gru_size]
+                    # only use final state
+                    seq_length = tf.reduce_sum(self.char_mask, axis=1)
+                    _, (fw_final_state, bk_final_state) = \
+                        tf.nn.bidirectional_dynamic_rnn(
+                            fw_gru, bk_gru, token_embed, sequence_length=seq_length,
+                            dtype=tf.float32, scope="char_rnn")
+                    fw_embed = tf.layers.dense(
+                        fw_final_state, self.embed_dim // 2)
+                    bk_embed = tf.layers.dense(
+                        bk_final_state, self.embed_dim // 2)
+                    merge_embed = fw_embed + bk_embed
+                    doc_char_embed = tf.nn.embedding_lookup(
+                        merge_embed, self.doc_char, name="doc_char_embedding")
+                    qry_char_embed = tf.nn.embedding_lookup(
+                        merge_embed, self.qry_char, name="query_char_embedding")
 
-                doc_embed = tf.concat([doc_embed, doc_char_embed], axis=2)
-                qry_embed = tf.concat([qry_embed, qry_char_embed], axis=2)
+                    doc_embed = tf.concat([doc_embed, doc_char_embed], axis=2)
+                    qry_embed = tf.concat([qry_embed, qry_char_embed], axis=2)
 
         self.attentions = []  # Saving for debugging reasons
         if self.save_attn:
@@ -175,7 +166,6 @@ class GAReader:
             self.attentions.append(inter)
 
         # Creating the 'K' hops with Bi-directional GRUs
-        # TODO: Document with comments extensively, refer to figures (cf.), name paper, link paper
         for i in range(self.n_layers - 1):
             # DOCUMENT
             with tf.name_scope("Document"):
@@ -251,8 +241,6 @@ class GAReader:
                 # The interaction matrix is input into dense layers (1 for answer start- and 1 for end-index)
                 # The dense layer output is softmax'd then averaged across query words to obtain predictions.
                 self.pred = attention_sum(inter, self.n_hidden_dense, name="attention_sum")
-                self.start_probs = self.pred[0]
-                self.end_probs = self.pred[1]
                 start_pred_idx = tf.expand_dims(tf.argmax(self.pred[0], axis=1), axis=1)
                 end_pred_idx = tf.expand_dims(tf.argmax(self.pred[1], axis=1), axis=1)
 
@@ -285,14 +273,11 @@ class GAReader:
                 self.acc_metric, self.acc_metric_update = tf.metrics.accuracy(
                     self.answer, self.pred_ans)
             else:  # Span-style
-                self.accuracy = tf.reduce_sum(tf.cast(
+                accuracy = tf.reduce_sum(tf.cast(
                     tf.equal(self.answer, self.pred_ans), tf.float32))
-                # self.accuracy = tf.reduce_sum(self.accuracy)  # Not necessary since, it's already scalar
-                self.accuracy /= 2
+                self.accuracy = tf.reduce_sum(accuracy)  # TODO: Might be wrong, seems low on tensorboard
                 self.acc_metric, self.acc_metric_update = tf.metrics.accuracy(
-                    self.answer, self.pred_ans, name="accuracy_metric")
-                self.valid_acc_metric, self.valid_acc_metric_update = tf.metrics.accuracy(
-                    self.answer, self.pred_ans, name="valid_accuracy_metric")
+                    self.answer, self.pred_ans)
 
         vars_list = tf.trainable_variables()
 
@@ -306,11 +291,8 @@ class GAReader:
         self.save_vars()
 
         # Tensorboard summaries
-        self.acc_summ = tf.summary.scalar('acc_metric', self.acc_metric_update)
-        self.loss_summ = tf.summary.scalar('loss_metric', self.loss)
+        self.acc_summ = tf.summary.scalar('acc_metric', self.acc_metric)
         self.merged_summary = tf.summary.merge_all()
-
-        self.valid_acc_summ = tf.summary.scalar('valid_acc_metric', self.valid_acc_metric_update)
 
     def save_vars(self):
         """
@@ -335,13 +317,8 @@ class GAReader:
         tf.add_to_collection('accuracy', self.accuracy)
         tf.add_to_collection('updates', self.updates)
         tf.add_to_collection('learning_rate', self.learning_rate)
-        tf.add_to_collection('use_chars', self.use_chars)
-        if not self.use_cloze_style:
-            tf.add_to_collection('predicted_answer', self.pred_ans)
-            tf.add_to_collection('answer_start_probs', self.start_probs)
-            tf.add_to_collection('answer_end_probs', self.end_probs)
 
-    # Replace train inputs with one input, then unpack the tuple input within the definition.
+# Replace train inputs with one input, then unpack the tuple input within the definition.
     def train(self, sess, training_data, dropout, learning_rate, iteration, writer, epoch, max_it):
         """
         train model
@@ -349,8 +326,8 @@ class GAReader:
         - data: (object) containing training data
         """
         if self.use_cloze_style:
-            dw, dt, qw, qt, a, m_dw, m_qw, \
-            tt, tm, c, m_c, cl, fnames = training_data
+            dw, dt, qw, qt, a, m_dw, m_qw,\
+                tt, tm, c, m_c, cl, fnames = training_data
 
             feed_dict = {self.doc: dw, self.qry: qw,
                          self.doc_char: dt, self.qry_char: qt, self.answer: a,
@@ -379,19 +356,19 @@ class GAReader:
             feat = prepare_input(dw, qw)
             feed_dict += {self.feat: feat}
 
-        if iteration % 10 == 0:  # Get updated summary for Tensorboard every 10th iteration
-            loss, acc, updates, merged_summ = sess.run([self.loss, self.accuracy,
-                                                        self.updates, self.merged_summary], feed_dict)
-            # TODO: add merged summaries to writer, once they are done
-            writer.add_summary(merged_summ, (epoch * max_it + iteration))
-        else:  # Otherwise, get regular updates
-            loss, acc, updates = \
-                sess.run([self.loss, self.accuracy,
-                          self.updates], feed_dict)
+        loss, acc, updates, attentions, pred, answer = \
+            sess.run([self.loss, self.accuracy,
+                      self.updates, self.attentions,
+                      self.pred, self.answer], feed_dict)
 
-        return loss, acc, updates
+        # Adding TensorBoard summary
+        if iteration % 10 == 0:
+            sess.run(self.acc_metric_update, feed_dict)
+            writer.add_summary(self.acc_summ.eval(), (epoch * max_it + iteration))
 
-    def validate(self, sess, valid_batch_loader, iteration, writer, epoch, max_it):
+        return loss, acc, updates, attentions, pred, answer
+
+    def validate(self, sess, valid_batch_loader):
         """
         test the model
         """
@@ -399,8 +376,7 @@ class GAReader:
         tr = trange(
             len(valid_batch_loader),
             desc="loss: {:.3f}, acc: {:.3f}".format(0.0, 0.0),
-            leave=False,
-            ascii=True)
+            leave=False)
         # SQUAD_MOD
         start = time.time()
         for validation_data in valid_batch_loader:
@@ -432,20 +408,15 @@ class GAReader:
             if self.use_feat:
                 feat = prepare_input(dw, qw)
                 feed_dict += {self.feat: feat}
-
-            _loss, _acc, valid_acc_summary = \
-                sess.run([self.loss, self.accuracy, self.valid_acc_summ], feed_dict)
-
+            _loss, _acc = sess.run([self.loss, self.accuracy], feed_dict)
             n_example += dw.shape[0]
             loss += _loss
             acc += _acc
             tr.set_description("loss: {:.3f}, acc: {:.3f}".
                                format(_loss, _acc / dw.shape[0]))
             tr.update()
-
-        tr.close()
-        writer.add_summary(valid_acc_summary, (epoch * max_it + iteration))
         # SQUAD_MOD
+        tr.close()
         loss /= n_example
         acc /= n_example
         spend = (time.time() - start) / 60
@@ -454,46 +425,15 @@ class GAReader:
         logging.info(statement)
         return loss, acc
 
-    def predict(self, sess, batch_loader):
-
-        output = []
-        for samples in batch_loader:
-            dw, dt, qw, qt, a, m_dw, m_qw, tt, tm, fnames = samples
-
-            if self.use_chars:  # Use the character indices
-                a = a[:, :2]
-            else:  # Use the word-token indices
-                a = a[:, 2:]
-
-            feed_dict = {self.doc: dw, self.qry: qw,
-                         self.doc_char: dt, self.qry_char: qt,
-                         self.answer: a, self.doc_mask: m_dw,
-                         self.qry_mask: m_qw, self.token: tt,
-                         self.char_mask: tm, self.keep_prob: 1.,
-                         self.learning_rate: 0.}
-
-            doc, qry, answer, pred_ans, start_probs, end_probs = \
-                sess.run([self.doc, self.qry, self.answer, self.pred_ans,
-                          self.start_probs, self.end_probs], feed_dict)
-
-            output.append((doc, qry, answer, pred_ans, start_probs, end_probs))
-
-        return output
-
-    def restore(self, sess, checkpoint_dir, epoch):
+    def restore(self, sess, checkpoint_dir):
         """
         restore model
         """
-        checkpoint_path = os.path.join(checkpoint_dir,
-                                       'model_epoch{}.ckpt'.format(epoch))
-
-        print("\nRestoring model from: {}\n".format(checkpoint_path))
-
+        checkpoint_path = os.path.join(checkpoint_dir, 'model.ckpt')
         loader = tf.train.import_meta_graph(checkpoint_path + '.meta')
         loader.restore(sess, checkpoint_path)
         logging.info("model restored from {}".format(checkpoint_path))
         # restore variables from checkpoint
-
         self.doc = tf.get_collection('doc')[0]
         self.qry = tf.get_collection('qry')[0]
         self.doc_char = tf.get_collection('doc_char')[0]
@@ -513,11 +453,6 @@ class GAReader:
         self.accuracy = tf.get_collection('accuracy')[0]
         self.updates = tf.get_collection('updates')[0]
         self.learning_rate = tf.get_collection('learning_rate')[0]
-
-        self.pred_ans = tf.get_collection('predicted_answer')[0]
-        self.start_probs = tf.get_collection('answer_start_probs')[0]
-        self.end_probs = tf.get_collection('answer_end_probs')[0]
-        self.use_chars = tf.get_collection('use_chars')[0]
 
     def save(self, sess, saver, checkpoint_dir, epoch):
         checkpoint_path = os.path.join(checkpoint_dir, 'model_epoch{}.ckpt'.format(epoch))

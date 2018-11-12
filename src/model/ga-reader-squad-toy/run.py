@@ -12,9 +12,10 @@ from tqdm import tqdm
 from utils.DataPreprocessor import DataPreprocessor
 from utils.MiniBatchLoader import MiniBatchLoader
 from utils.Helpers import check_dir, load_word2vec_embeddings
-from data.squad_processing_v11 import squad_parser
+from utils.squad_processing_v11 import squad_parser
 from model.GAReader import GAReader
 
+from tensorflow.python import debug as tf_debug
 
 def str2bool(v):
     if v.lower() in ('yes', 'true', 't', 'y', '1'):
@@ -33,8 +34,6 @@ def get_args():
 
     parser.add_argument('--resume', type='bool', default=False,
                         help='whether to keep training from previous model')
-    parser.add_argument('--test_only', type='bool', default=False,
-                        help='whether to only do test run')
     parser.add_argument('--use_feat', type='bool', default=False,
                         help='whether to use question-evidence common feature')
     parser.add_argument('--train_emb', type='bool', default=True,
@@ -43,20 +42,20 @@ def get_args():
                         help='whether to perform initial test')
     parser.add_argument('--model_name', type=str, default="model_{}".format(datetime.now().isoformat()),
                         help='Name of the model, used in saving logs and checkpoints')
-    parser.add_argument('--data_dir', type=str, default='/scratch/s161027/ga_reader_data/squad',
+    parser.add_argument('--data_dir', type=str, default='data',
                         help='data directory containing input')
     # SQUAD_MOD
     parser.add_argument('--cloze_style', type='bool', default=False,
                         help='Whether the dataset is cloze-style QA. Otherwise it is span-style QA (e.g. SQuAD)')
     # SQUAD_MOD
     parser.add_argument('--log_dir', type=str,
-                        default='/scratch/s161027/run_data/temp_test_delete/log',
+                        default='logs',
                         help='directory containing tensorboard logs')
     parser.add_argument('--save_dir', type=str,
-                        default='/scratch/s161027/run_data/temp_test_delete/saved_models',
+                        default='saved_models',
                         help='directory to store checkpointed models')
     parser.add_argument('--embed_file', type=str,
-                        default='/scratch/s161027/ga_reader_data/word2vec_glove.txt',
+                        default='data/word2vec_glove.txt',
                         help='word embedding initialization file')
     parser.add_argument('--n_hidden', type=int, default=256,
                         help='size of word GRU hidden state')
@@ -66,9 +65,9 @@ def get_args():
                         help='number of layers of the model')
     parser.add_argument('--batch_size', type=int, default=32,
                         help='mini-batch size')
-    parser.add_argument('--n_epoch', type=int, default=20,
+    parser.add_argument('--n_epoch', type=int, default=10,
                         help='number of epochs')
-    parser.add_argument('--eval_every', type=int, default=2000,
+    parser.add_argument('--eval_every', type=int, default=10000,
                         help='evaluation frequency')
     parser.add_argument('--print_every', type=int, default=50,
                         help='print frequency')
@@ -86,31 +85,35 @@ def get_args():
                         help='gating function')
     parser.add_argument('--drop_out', type=float, default=0.1,
                         help='dropout rate')
+    parser.add_argument('--test_run', type='bool', default=True,
+                        help='Whether to do only test run with limited data')
     args = parser.parse_args()
     return args
 
 
 def train(args):
     use_chars = args.char_dim > 0
+    test_run = args.test_run
+
     # SQUAD_MOD
     # Initialize session early to reserve GPU memory
     sess = tf.Session()
     # Condition for switching between cloze-style and span-style QA
     cloze_style = args.cloze_style
     if not cloze_style and not os.path.exists(
-            os.path.join(args.data_dir, "training")):
+            os.path.join(args.data_dir, "squad/training")):
         # Parsing SQuAD data set
-        squad_parser()
+        squad_parser(test_run)
     # SQUAD_MOD
 
     # Processing .question files and loading into memory (data in lists and tuples)
     dp = DataPreprocessor()
     data = dp.preprocess(
-        question_dir=args.data_dir,
+        question_dir=os.path.join(args.data_dir, "squad"),
         max_example=args.max_example,
         use_chars=use_chars,
         use_cloze_style=cloze_style,
-        only_test_run=args.test_only)
+        only_test_run=test_run)
 
     # Building the iterable batch loaders (data in numpy arrays)
     train_batch_loader = MiniBatchLoader(
@@ -133,7 +136,7 @@ def train(args):
         # Loading the GLoVE vectors
         logging.info("loading word2vec file ...")
         embed_init, embed_dim = \
-            load_word2vec_embeddings(data.dictionary[0], args.embed_file)
+            load_word2vec_embeddings(data.dictionary[0], None)
         logging.info("embedding dim: {}".format(embed_dim))
         logging.info("initialize model ...")
         model = GAReader(args.n_layers, data.vocab_size, data.num_chars,
@@ -148,23 +151,18 @@ def train(args):
         loc_init = tf.local_variables_initializer()
         saver = tf.train.Saver(tf.global_variables())
     else:
-        model = GAReader(args.n_layers, data.vocab_size, data.num_chars,
-                         args.n_hidden, args.n_hidden_dense, 100, args.train_emb, args.char_dim,
-                         args.use_feat, args.gating_fn)
+            model = GAReader(args.n_layers, data.vocab_size, data.num_chars,
+                             args.n_hidden, 100, args.train_emb, args.char_dim,
+                             args.use_feat, args.gating_fn)
 
+    # Tensorboard
+    writer = tf.summary.FileWriter(args.log_dir)
     # Setting GPU memory
     # gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=1)
 
     with sess:
         # Tensorboard
-        writer = tf.summary.FileWriter(args.log_dir+"/tensorboard/training",
-                                       graph=sess.graph,
-                                       flush_secs=60,
-                                       filename_suffix="_train_"+args.model_name)
-        writer_val = tf.summary.FileWriter(args.log_dir+"/tensorboard/validation",
-                                           graph=sess.graph,
-                                           flush_secs=60,
-                                           filename_suffix="_validate_"+args.model_name)
+        writer.add_graph(sess.graph)
 
         # training phase
         if not args.resume:
@@ -176,13 +174,12 @@ def train(args):
             else:
                 best_acc = 0.
         else:
-            model.restore(sess, args.save_dir, epoch=9)
+            model.restore(sess, args.save_dir)
             saver = tf.train.Saver(tf.global_variables())
-
         logging.info('-' * 100)
+        lr = args.init_learning_rate
         logging.info("Start training ...")
 
-        lr = args.init_learning_rate
         epoch_range = tqdm(range(args.n_epoch), leave=True, ascii=True, ncols=100)
         max_it = len(train_batch_loader)
 
@@ -193,14 +190,8 @@ def train(args):
             if epoch >= 2:
                 lr /= 2
 
-                # Reinitialize streaming accuracy metric for each epoch
-                running_vars = tf.get_collection(tf.GraphKeys.LOCAL_VARIABLES,
-                                                 scope="accuracy_metric")
-                running_vars_initializer = tf.variables_initializer(var_list=running_vars)
-                sess.run(running_vars_initializer)
-
             for training_data in train_batch_loader:
-                loss_, acc_, updates_ = \
+                loss_, acc_, updates_, attentions_, pred_, answer_ = \
                     model.train(sess, training_data, args.drop_out, lr, it, writer, epoch, max_it)
 
                 # SQUAD_MOD
@@ -239,17 +230,11 @@ def train(args):
                     logging.info(statement)
                     loss = acc = n_example = 0
                     start = time.time()
-                # Validate, and save model
+                # save model
                 if it % args.eval_every == 0 or \
                         it % max_it == 0:
-                    # Reinitialize streaming accuracy metric for each validation
-                    running_vars = tf.get_collection(tf.GraphKeys.LOCAL_VARIABLES,
-                                                     scope="valid_accuracy_metric")
-                    running_vars_initializer = tf.variables_initializer(var_list=running_vars)
-                    sess.run(running_vars_initializer)
-
-                    valid_loss, valid_acc = \
-                        model.validate(sess, valid_batch_loader, it, writer_val, epoch, max_it)
+                    valid_loss, valid_acc = model.validate(
+                        sess, valid_batch_loader)
                     if valid_acc >= best_acc:
                         logging.info("Best valid acc: {:.3f}, previous best: {:.3f}".format(
                             valid_acc,
@@ -264,11 +249,17 @@ def train(args):
 
 if __name__ == "__main__":
     args = get_args()
+
+    args.data_dir = os.path.join(os.getcwd(), args.data_dir)
+    args.log_dir = os.path.join(os.getcwd(), args.log_dir)
+    args.save_dir = os.path.join(os.getcwd(), args.save_dir)
+    args.embed_file = os.path.join(os.getcwd(), args.embed_file)
+
     tf.set_random_seed(args.seed)
     np.random.seed(args.seed)
     # Check the existence of directories
     args.data_dir = os.path.join(os.getcwd(), args.data_dir)
-    check_dir(args.data_dir, exit_function=True)
+    check_dir(args.data_dir, exit_function=False)
     args.log_dir = os.path.join(os.getcwd(), args.log_dir)
     args.save_dir = os.path.join(os.getcwd(), args.save_dir)
     check_dir(args.log_dir, args.save_dir, exit_function=False)

@@ -114,7 +114,6 @@ class DataPreprocessor:
             vocab_fp.close()
 
         vocab_size = len(vocabularies)
-        # TODO: Shift dictionary values by 1, to not have 0 represent any word
         word_dictionary = dict(zip(vocabularies, range(vocab_size)))
         char_set = set([c for w in vocabularies for c in list(w)])
         char_set.add(' ')
@@ -216,10 +215,13 @@ class DataPreprocessor:
         else:
             parsing_function = self.parse_one_file_span
 
-        all_files = glob.glob(directory + '/*.question')[:max_example]
-        # Wrap iterable for progress bar
+        all_files = glob.glob(directory + '/*.question' [:max_example])
+
+        # If it's a test run, limit the number of samples.
         if test_run:
-            all_files = all_files[:100]
+            all_files = all_files[:500]
+
+        # Wrap iterable for progress bar
         all_files = tqdm(all_files, leave=True, ascii=True, ncols=100)
 
         questions = [parsing_function(f, dictionary, use_chars) + (f,) for f in all_files]
