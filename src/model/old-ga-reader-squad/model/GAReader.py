@@ -7,6 +7,7 @@ from tqdm import trange
 from model.layers import gated_attention,\
                                pairwise_interaction,\
                                attention_sum,\
+                               attention_sum_cloze, \
                                crossentropy
 from utils.Helpers import prepare_input
 
@@ -16,7 +17,7 @@ MAX_WORD_LEN = 10
 class GAReader:
     def __init__(self, n_layers, vocab_size, n_chars,
                  n_hidden, n_hidden_dense, embed_dim, train_emb, char_dim,
-                 use_feat, gating_fn, save_attn=False):
+                 use_feat, gating_fn, save_attn=False, use_cloze_style=False):
         self.n_hidden = n_hidden
         self.n_hidden_dense = n_hidden_dense
         self.n_layers = n_layers
@@ -29,10 +30,14 @@ class GAReader:
         self.save_attn = save_attn
         self.vocab_size = vocab_size
         self.use_chars = self.char_dim != 0
-
+        self.use_cloze_style = use_cloze_style
         # Graph initialization
         self.doc = None
         self.qry = None
+        if use_cloze_style:  # These are only needed for cloze-style QA
+            self.cand = None
+            self.cand_mask = None
+            self.cloze = None
         self.answer = None
         self.doc_mask = None
         self.qry_mask = None
@@ -44,7 +49,7 @@ class GAReader:
         self.learning_rate = None
         self.keep_prob = None
         self.attentions = None
-        self.attention_tensors = None
+
         self.pred = None
         self.start_probs = None
         self.end_probs = None
@@ -54,7 +59,6 @@ class GAReader:
         self.accuracy = None
         self.updates = None
 
-        # Tensorboard variables
         self.acc_metric = None
         self.acc_metric_update = None
         self.valid_acc_metric = None
@@ -62,9 +66,10 @@ class GAReader:
         self.loss_summ = None
         self.acc_summ = None
         self.valid_acc_summ = None
+
         self.merged_summary = None
 
-    def build_graph(self, grad_clip, embed_init, seed, max_doc_len, max_qry_len):
+    def build_graph(self, grad_clip, embed_init, seed, max_doc_len, max_qry_len, use_cloze_style=False):
         # Defining inputs
         with tf.name_scope("Inputs"):
             self.doc = tf.placeholder(
@@ -72,9 +77,22 @@ class GAReader:
             self.qry = tf.placeholder(
                 tf.int32, [None, max_qry_len], name="qry")  # Query words
 
-            # Answer looks like -> Batch_size * [answer_start_index, answer_end_index]
-            self.answer = tf.placeholder(
-                tf.int32, [None, 2], name="answer")
+            if use_cloze_style:  # Cloze-style data
+                self.answer = tf.placeholder(
+                    tf.int32, [None, ], name="answer")              # Answer
+                self.cand = tf.placeholder(
+                    tf.int32, [None, None, None], name="cand_ans")  # Candidate answers
+                self.cloze = tf.placeholder(
+                    tf.int32, [None, ], name="cloze")               # Cloze
+                self.cand_mask = tf.placeholder(
+                    tf.int32, [None, None], name="cand_mask")
+            else:  # Span-style data, with start- and end-index
+                # Answer looks like -> Batch_size * [answer_start_index, answer_end_index]
+                self.answer = tf.placeholder(
+                    tf.int32, [None, 2], name="answer")
+                self.pred_ans = tf.placeholder(tf.int32, [None, 2], name="predicted_answer")
+                self.start_probs = tf.placeholder(tf.float32, [None, None], name="answer_start_probs")
+                self.end_probs = tf.placeholder(tf.float32, [None, None], name="answer_end_probs")
 
             # word mask TODO: dtype could be changed to int8 or bool
             self.doc_mask = tf.placeholder(
@@ -94,11 +112,6 @@ class GAReader:
             # extra features, see GA Reader (Dhingra et al.) paper, "question evidence common word feature"
             self.feat = tf.placeholder(
                 tf.int32, [None, None], name="features")
-
-        self.pred_ans = tf.placeholder(tf.int32, [None, 2], name="predicted_answer")
-        self.start_probs = tf.placeholder(tf.float32, [None, None], name="answer_start_probs")
-        self.end_probs = tf.placeholder(tf.float32, [None, None], name="answer_end_probs")
-        self.attention_tensors = tf.placeholder(tf.float32, [None], name="attentions")
 
         # model parameters
         self.learning_rate = tf.placeholder(tf.float32, name="learning_rate")
@@ -219,48 +232,67 @@ class GAReader:
                 dtype=tf.float32, scope="final_qry_rnn")
             qry_embed_final = tf.concat([fw_qry_states, bk_qry_states], axis=2)
 
-        inter = pairwise_interaction(doc_embed_final, qry_embed_final)
+        if not self.use_cloze_style:
+            # Final interaction matrix
+            inter = pairwise_interaction(doc_embed_final, qry_embed_final)
         if self.save_attn:
             self.attentions.append(inter)
 
-        # TODO: Fix to be tf variable with scope?
-        self.attention_tensors = tf.convert_to_tensor(self.attentions, dtype=tf.float32, name="attentions")
-
         # Attention Sum
         with tf.name_scope("Prediction"):
-            # Transforming the final pairwise interaction matrix (between document and query)
-            # The interaction matrix is input into dense layers (1 for answer start- and 1 for end-index)
-            # The dense layer output is softmax'd then averaged across query words to obtain predictions.
-            self.pred = attention_sum(inter, self.n_hidden_dense, name="attention_sum")
-            self.start_probs = self.pred[0]
-            self.end_probs = self.pred[1]
-            start_pred_idx = tf.expand_dims(tf.argmax(self.pred[0], axis=1), axis=1)
-            end_pred_idx = tf.expand_dims(tf.argmax(self.pred[1], axis=1), axis=1)
+            if self.use_cloze_style:
+                self.pred = attention_sum_cloze(
+                    doc_embed_final, qry_embed_final, self.cand,
+                    self.cloze, self.cand_mask)
+                # Making the prediction by taking the max. probability among candidates
+                self.pred_ans = tf.cast(tf.argmax(self.pred, axis=1), tf.int32)
+            else:  # Span-style
+                # Transforming the final pairwise interaction matrix (between document and query)
+                # The interaction matrix is input into dense layers (1 for answer start- and 1 for end-index)
+                # The dense layer output is softmax'd then averaged across query words to obtain predictions.
+                self.pred = attention_sum(inter, self.n_hidden_dense, name="attention_sum")
+                self.start_probs = self.pred[0]
+                self.end_probs = self.pred[1]
+                start_pred_idx = tf.expand_dims(tf.argmax(self.pred[0], axis=1), axis=1)
+                end_pred_idx = tf.expand_dims(tf.argmax(self.pred[1], axis=1), axis=1)
 
-            self.pred_ans = tf.concat([start_pred_idx, end_pred_idx], axis=1)
+                self.pred_ans = tf.concat([start_pred_idx, end_pred_idx], axis=1)
 
         with tf.name_scope("Loss"):
-            # TODO: Review if cross entropy is used correctly here
-            start_loss = tf.expand_dims(crossentropy(self.pred[0], self.answer[:, 0]), axis=1)
-            end_loss = tf.expand_dims(crossentropy(self.pred[1], self.answer[:, 1]), axis=1)
-            # TODO: Is it correct to average the losses on answer start- and end-index?
-            total_loss = tf.reduce_mean(
-                tf.concat([start_loss, end_loss], axis=1), axis=1)
-            self.loss = tf.reduce_mean(total_loss)
+            if self.use_cloze_style:
+                self.loss = tf.reduce_mean(crossentropy(self.pred, self.answer))
+            else:  # Span-style
+                # TODO: Review if cross entropy is used correctly here
+                start_loss = tf.expand_dims(crossentropy(self.pred[0], self.answer[:, 0]), axis=1)
+                end_loss = tf.expand_dims(crossentropy(self.pred[1], self.answer[:, 1]), axis=1)
+                # TODO: Is it correct to average the losses on answer start- and end-index?
+                total_loss = tf.reduce_mean(
+                    tf.concat([start_loss, end_loss], axis=1), axis=1)
+                self.loss = tf.reduce_mean(total_loss)
         with tf.name_scope("Test"):
-            self.pred_ans = tf.cast(self.pred_ans, tf.int32)
-            self.test = tf.cast(
-                tf.equal(self.answer, self.pred_ans), tf.float32)
+            if self.use_cloze_style:
+                self.test = tf.cast(
+                    tf.equal(self.answer, self.pred_ans), tf.float32)
+            else:  # Span-style
+                self.pred_ans = tf.cast(self.pred_ans, tf.int32)
+                self.test = tf.cast(
+                    tf.equal(self.answer, self.pred_ans), tf.float32)
 
         with tf.name_scope("Accuracy"):
-            self.accuracy = tf.reduce_sum(tf.cast(
-                tf.equal(self.answer, self.pred_ans), tf.float32))
-            # self.accuracy = tf.reduce_sum(self.accuracy)  # Not necessary since, it's already scalar
-            self.accuracy /= 2
-            self.acc_metric, self.acc_metric_update = tf.metrics.accuracy(
-                self.answer, self.pred_ans, name="accuracy_metric")
-            self.valid_acc_metric, self.valid_acc_metric_update = tf.metrics.accuracy(
-                self.answer, self.pred_ans, name="valid_accuracy_metric")
+            if self.use_cloze_style:
+                self.accuracy = tf.reduce_sum(
+                    tf.cast(tf.equal(self.answer, self.pred_ans), tf.float32))
+                self.acc_metric, self.acc_metric_update = tf.metrics.accuracy(
+                    self.answer, self.pred_ans)
+            else:  # Span-style
+                self.accuracy = tf.reduce_sum(tf.cast(
+                    tf.equal(self.answer, self.pred_ans), tf.float32))
+                # self.accuracy = tf.reduce_sum(self.accuracy)  # Not necessary since, it's already scalar
+                self.accuracy /= 2
+                self.acc_metric, self.acc_metric_update = tf.metrics.accuracy(
+                    self.answer, self.pred_ans, name="accuracy_metric")
+                self.valid_acc_metric, self.valid_acc_metric_update = tf.metrics.accuracy(
+                    self.answer, self.pred_ans, name="valid_accuracy_metric")
 
         vars_list = tf.trainable_variables()
 
@@ -293,6 +325,10 @@ class GAReader:
         tf.add_to_collection('qry_mask', self.qry_mask)
         tf.add_to_collection('token', self.token)
         tf.add_to_collection('char_mask', self.char_mask)
+        if self.use_cloze_style:
+            tf.add_to_collection('cand', self.cand)
+            tf.add_to_collection('cand_mask', self.cand_mask)
+            tf.add_to_collection('cloze', self.cloze)
         tf.add_to_collection('feat', self.feat)
         tf.add_to_collection('keep_prob', self.keep_prob)
         tf.add_to_collection('loss', self.loss)
@@ -300,10 +336,10 @@ class GAReader:
         tf.add_to_collection('updates', self.updates)
         tf.add_to_collection('learning_rate', self.learning_rate)
         tf.add_to_collection('use_chars', self.use_chars)
-        tf.add_to_collection('predicted_answer', self.pred_ans)
-        tf.add_to_collection('answer_start_probs', self.start_probs)
-        tf.add_to_collection('answer_end_probs', self.end_probs)
-        tf.add_to_collection('attentions', self.attention_tensors)
+        if not self.use_cloze_style:
+            tf.add_to_collection('predicted_answer', self.pred_ans)
+            tf.add_to_collection('answer_start_probs', self.start_probs)
+            tf.add_to_collection('answer_end_probs', self.end_probs)
 
     # Replace train inputs with one input, then unpack the tuple input within the definition.
     def train(self, sess, training_data, dropout, learning_rate, iteration, writer, epoch, max_it):
@@ -312,22 +348,33 @@ class GAReader:
         Args:
         - data: (object) containing training data
         """
-        dw, dt, qw, qt, a, m_dw, m_qw, tt, tm, fnames = training_data
+        if self.use_cloze_style:
+            dw, dt, qw, qt, a, m_dw, m_qw, \
+            tt, tm, c, m_c, cl, fnames = training_data
 
-        # Original answer contains character and token indices both
-        # Here, I mask out the unnecessary part
-        if self.use_chars:  # Use the character indices
-            a = a[:, :2]
-        else:  # Use the word-token indices
-            a = a[:, 2:]
+            feed_dict = {self.doc: dw, self.qry: qw,
+                         self.doc_char: dt, self.qry_char: qt, self.answer: a,
+                         self.doc_mask: m_dw, self.qry_mask: m_qw,
+                         self.token: tt, self.char_mask: tm,
+                         self.cand: c, self.cand_mask: m_c,
+                         self.cloze: cl, self.keep_prob: 1 - dropout,
+                         self.learning_rate: learning_rate}
+        else:  # Span-style data
+            dw, dt, qw, qt, a, m_dw, m_qw, tt, tm, fnames = training_data
 
-        feed_dict = {self.doc: dw, self.qry: qw,
-                     self.doc_char: dt, self.qry_char: qt,
-                     self.answer: a, self.doc_mask: m_dw,
-                     self.qry_mask: m_qw, self.token: tt,
-                     self.char_mask: tm, self.keep_prob: 1 - dropout,
-                     self.learning_rate: learning_rate}
+            # Original answer contains character and token indices both
+            # Here, I mask out the unnecessary part
+            if self.use_chars:  # Use the character indices
+                a = a[:, :2]
+            else:  # Use the word-token indices
+                a = a[:, 2:]
 
+            feed_dict = {self.doc: dw, self.qry: qw,
+                         self.doc_char: dt, self.qry_char: qt,
+                         self.answer: a, self.doc_mask: m_dw,
+                         self.qry_mask: m_qw, self.token: tt,
+                         self.char_mask: tm, self.keep_prob: 1 - dropout,
+                         self.learning_rate: learning_rate}
         if self.use_feat:
             feat = prepare_input(dw, qw)
             feed_dict += {self.feat: feat}
@@ -344,9 +391,7 @@ class GAReader:
 
         return loss, acc, updates
 
-    def validate(self, sess, valid_batch_loader,
-                 iteration=None, writer=None,
-                 epoch=None, max_it=None):
+    def validate(self, sess, valid_batch_loader, iteration, writer, epoch, max_it):
         """
         test the model
         """
@@ -356,21 +401,33 @@ class GAReader:
             desc="loss: {:.3f}, acc: {:.3f}".format(0.0, 0.0),
             leave=False,
             ascii=True)
+        # SQUAD_MOD
         start = time.time()
         for validation_data in valid_batch_loader:
-            dw, dt, qw, qt, a, m_dw, m_qw, tt, tm, fnames = validation_data
+            if self.use_cloze_style:
+                dw, dt, qw, qt, a, m_dw, m_qw, tt, \
+                    tm, c, m_c, cl, fnames = validation_data
+                feed_dict = {self.doc: dw, self.qry: qw,
+                             self.doc_char: dt, self.qry_char: qt, self.answer: a,
+                             self.doc_mask: m_dw, self.qry_mask: m_qw,
+                             self.token: tt, self.char_mask: tm,
+                             self.cand: c, self.cand_mask: m_c,
+                             self.cloze: cl, self.keep_prob: 1.,
+                             self.learning_rate: 0.}
+            else:  # Span-style
+                dw, dt, qw, qt, a, m_dw, m_qw, tt, tm, fnames = validation_data
 
-            if self.use_chars:  # Use the character indices
-                a = a[:, :2]
-            else:  # Use the word-token indices
-                a = a[:, 2:]
+                if self.use_chars:  # Use the character indices
+                    a = a[:, :2]
+                else:  # Use the word-token indices
+                    a = a[:, 2:]
 
-            feed_dict = {self.doc: dw, self.qry: qw,
-                         self.doc_char: dt, self.qry_char: qt,
-                         self.answer: a, self.doc_mask: m_dw,
-                         self.qry_mask: m_qw, self.token: tt,
-                         self.char_mask: tm, self.keep_prob: 1.,
-                         self.learning_rate: 0.}
+                feed_dict = {self.doc: dw, self.qry: qw,
+                             self.doc_char: dt, self.qry_char: qt,
+                             self.answer: a, self.doc_mask: m_dw,
+                             self.qry_mask: m_qw, self.token: tt,
+                             self.char_mask: tm, self.keep_prob: 1.,
+                             self.learning_rate: 0.}
 
             if self.use_feat:
                 feat = prepare_input(dw, qw)
@@ -387,9 +444,8 @@ class GAReader:
             tr.update()
 
         tr.close()
-        if writer is not None:
-            writer.add_summary(valid_acc_summary, (epoch * max_it + iteration))
-
+        writer.add_summary(valid_acc_summary, (epoch * max_it + iteration))
+        # SQUAD_MOD
         loss /= n_example
         acc /= n_example
         spend = (time.time() - start) / 60
@@ -403,18 +459,12 @@ class GAReader:
         output = []
         for samples in batch_loader:
             dw, dt, qw, qt, a, m_dw, m_qw, tt, tm, fnames = samples
+
             if self.use_chars:  # Use the character indices
                 a = a[:, :2]
             else:  # Use the word-token indices
                 a = a[:, 2:]
 
-            # Test: only feeding one example at a time (keeping numpy array dimensionality)
-            # feed_dict = {self.doc: dw[[0], :], self.qry: qw[[0], :],
-            #              self.doc_char: dt[[0], :], self.qry_char: qt[[0], :],
-            #              self.answer: a[[0], :], self.doc_mask: m_dw[[0], :],
-            #              self.qry_mask: m_qw[[0], :], self.token: tt,
-            #              self.char_mask: tm, self.keep_prob: 1.,
-            #              self.learning_rate: 0.}
             feed_dict = {self.doc: dw, self.qry: qw,
                          self.doc_char: dt, self.qry_char: qt,
                          self.answer: a, self.doc_mask: m_dw,
@@ -422,13 +472,11 @@ class GAReader:
                          self.char_mask: tm, self.keep_prob: 1.,
                          self.learning_rate: 0.}
 
-            doc, qry, answer, pred_ans, start_probs, end_probs, attention_tensors = \
+            doc, qry, answer, pred_ans, start_probs, end_probs = \
                 sess.run([self.doc, self.qry, self.answer, self.pred_ans,
-                          self.start_probs, self.end_probs,
-                          self.attention_tensors], feed_dict)
-            output.append((doc, qry, answer,
-                           pred_ans, start_probs,
-                           end_probs, attention_tensors))
+                          self.start_probs, self.end_probs], feed_dict)
+
+            output.append((doc, qry, answer, pred_ans, start_probs, end_probs))
 
         return output
 
@@ -445,6 +493,7 @@ class GAReader:
         loader.restore(sess, checkpoint_path)
         logging.info("model restored from {}".format(checkpoint_path))
         # restore variables from checkpoint
+
         self.doc = tf.get_collection('doc')[0]
         self.qry = tf.get_collection('qry')[0]
         self.doc_char = tf.get_collection('doc_char')[0]
@@ -454,18 +503,21 @@ class GAReader:
         self.qry_mask = tf.get_collection('qry_mask')[0]
         self.token = tf.get_collection('token')[0]
         self.char_mask = tf.get_collection('char_mask')[0]
+        if self.use_cloze_style:
+            self.cand = tf.get_collection('cand')[0]
+            self.cand_mask = tf.get_collection('cand_mask')[0]
+            self.cloze = tf.get_collection('cloze')[0]
         self.feat = tf.get_collection('feat')[0]
         self.keep_prob = tf.get_collection('keep_prob')[0]
         self.loss = tf.get_collection('loss')[0]
         self.accuracy = tf.get_collection('accuracy')[0]
         self.updates = tf.get_collection('updates')[0]
         self.learning_rate = tf.get_collection('learning_rate')[0]
+
         self.pred_ans = tf.get_collection('predicted_answer')[0]
         self.start_probs = tf.get_collection('answer_start_probs')[0]
         self.end_probs = tf.get_collection('answer_end_probs')[0]
         self.use_chars = tf.get_collection('use_chars')[0]
-        # TODO: Re-enable
-        self.attention_tensors = tf.get_collection('attentions')[0]
 
     def save(self, sess, saver, checkpoint_dir, epoch):
         checkpoint_path = os.path.join(checkpoint_dir, 'model_epoch{}.ckpt'.format(epoch))
