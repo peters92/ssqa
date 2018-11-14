@@ -162,9 +162,6 @@ class Analyser:
               .format(max_example, batch_number))
 
         # Restore Model
-        # default_path = "/scratch/s161027/run_data/first_working_squad_model"
-        # default_path = "/scratch/s161027/run_data/temp_test_delete"
-        # default_path = "/scratch/s161027/run_data/ga_reader_squad_reserve"
         default_path = "/scratch/s161027/run_data/visualization_test"
         if save_dir is None:
             save_dir = os.path.join(default_path, "saved_models")

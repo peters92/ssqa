@@ -47,10 +47,10 @@ def get_args():
     parser.add_argument('--data_dir', type=str, default='/scratch/s161027/ga_reader_data/squad',
                         help='data directory containing input')
     parser.add_argument('--log_dir', type=str,
-                        default='/scratch/s161027/run_data/visualization_test/log',
+                        default='/scratch/s161027/run_data/temp_test_delete/log',
                         help='directory containing tensorboard logs')
     parser.add_argument('--save_dir', type=str,
-                        default='/scratch/s161027/run_data/visualization_test/saved_models',
+                        default='/scratch/s161027/run_data/temp_test_delete/saved_models',
                         help='directory to store checkpointed models')
     parser.add_argument('--embed_file', type=str,
                         default='/scratch/s161027/ga_reader_data/word2vec_glove.txt',

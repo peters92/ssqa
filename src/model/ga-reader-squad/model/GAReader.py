@@ -303,13 +303,6 @@ class GAReader:
         """
         dw, dt, qw, qt, a, m_dw, m_qw, tt, tm, fnames = training_data
 
-        # Original answer contains character and token indices both
-        # Here, I mask out the unnecessary part
-        if self.use_chars:  # Use the character indices
-            a = a[:, :2]
-        else:  # Use the word-token indices
-            a = a[:, 2:]
-
         feed_dict = {self.doc: dw, self.qry: qw,
                      self.doc_char: dt, self.qry_char: qt,
                      self.answer: a, self.doc_mask: m_dw,
@@ -349,11 +342,6 @@ class GAReader:
         for validation_data in valid_batch_loader:
             dw, dt, qw, qt, a, m_dw, m_qw, tt, tm, fnames = validation_data
 
-            if self.use_chars:  # Use the character indices
-                a = a[:, :2]
-            else:  # Use the word-token indices
-                a = a[:, 2:]
-
             feed_dict = {self.doc: dw, self.qry: qw,
                          self.doc_char: dt, self.qry_char: qt,
                          self.answer: a, self.doc_mask: m_dw,
@@ -392,18 +380,7 @@ class GAReader:
         output = []
         for samples in batch_loader:
             dw, dt, qw, qt, a, m_dw, m_qw, tt, tm, fnames = samples
-            if self.use_chars:  # Use the character indices
-                a = a[:, :2]
-            else:  # Use the word-token indices
-                a = a[:, 2:]
 
-            # Test: only feeding one example at a time (keeping numpy array dimensionality)
-            # feed_dict = {self.doc: dw[[0], :], self.qry: qw[[0], :],
-            #              self.doc_char: dt[[0], :], self.qry_char: qt[[0], :],
-            #              self.answer: a[[0], :], self.doc_mask: m_dw[[0], :],
-            #              self.qry_mask: m_qw[[0], :], self.token: tt,
-            #              self.char_mask: tm, self.keep_prob: 1.,
-            #              self.learning_rate: 0.}
             feed_dict = {self.doc: dw, self.qry: qw,
                          self.doc_char: dt, self.qry_char: qt,
                          self.answer: a, self.doc_mask: m_dw,

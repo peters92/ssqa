@@ -116,8 +116,8 @@ class MiniBatchLoader:
             (curr_batch_size, self.max_qry_len),
             dtype='int32')
 
-        # The answer contains start- and end-index in character and token space
-        a = np.zeros((curr_batch_size, 4), dtype='int32')
+        # The answer contains start- and end-index
+        a = np.zeros((curr_batch_size, 2), dtype='int32')
 
         fnames = [''] * curr_batch_size
 
@@ -125,8 +125,7 @@ class MiniBatchLoader:
 
         for n, ix in enumerate(ixs):
             doc_w, qry_w, ans, doc_c, qry_c, \
-                ans_start_char, ans_end_char, \
-                ans_start_token, ans_end_token, fname = self.questions[ix]
+                ans_start, ans_end, fname = self.questions[ix]
 
             # document, query and candidates
             dw[n, : len(doc_w)] = np.array(doc_w)
@@ -145,8 +144,7 @@ class MiniBatchLoader:
                 types[wtuple].append((1, n, it))
 
             # Store the indices of the answer in the paragraph
-            a[n, :] = np.array([ans_start_char, ans_end_char,
-                                ans_start_token, ans_end_token])
+            a[n, :] = np.array([ans_start, ans_end])
 
             fnames[n] = fname
 

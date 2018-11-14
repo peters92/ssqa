@@ -171,12 +171,16 @@ class DataPreprocessor:
         if use_chars:
             doc_chars = [[c_dict.get(c, c_dict[' ']) for c in list(w)[:MAX_WORD_LEN]] for w in doc_raw]
             qry_chars = [[c_dict.get(c, c_dict[' ']) for c in list(w)[:MAX_WORD_LEN]] for w in qry_raw]
+            ans_start = ans_start_char
+            ans_end = ans_end_char
         else:
             doc_chars, qry_chars = [], []
+            ans_start = ans_start_token
+            ans_end = ans_end_token
 
         ans = [w_dict[w] for w in ans_raw]
         return doc_words, qry_words, ans, doc_chars, qry_chars, \
-            ans_start_char, ans_end_char, ans_start_token, ans_end_token
+               ans_start, ans_end
 
     def parse_all_files(self, directory, dictionary,
                         max_example, use_chars, test_run=False):
