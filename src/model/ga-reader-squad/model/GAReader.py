@@ -66,34 +66,33 @@ class GAReader:
 
     def build_graph(self, grad_clip, embed_init, seed, max_doc_len, max_qry_len):
         # Defining inputs
-        with tf.name_scope("Inputs"):
-            self.doc = tf.placeholder(
-                tf.int32, [None, max_doc_len], name="doc")  # Document words
-            self.qry = tf.placeholder(
-                tf.int32, [None, max_qry_len], name="qry")  # Query words
+        self.doc = tf.placeholder(
+            tf.int32, [None, max_doc_len], name="doc")  # Document words
+        self.qry = tf.placeholder(
+            tf.int32, [None, max_qry_len], name="qry")  # Query words
 
-            # Answer looks like -> Batch_size * [answer_start_index, answer_end_index]
-            self.answer = tf.placeholder(
-                tf.int32, [None, 2], name="answer")
+        # Answer looks like -> Batch_size * [answer_start_index, answer_end_index]
+        self.answer = tf.placeholder(
+            tf.int32, [None, 2], name="answer")
 
-            # word mask TODO: dtype could be changed to int8 or bool
-            self.doc_mask = tf.placeholder(
-                tf.int32, [None, None], name="doc_mask")
-            self.qry_mask = tf.placeholder(
-                tf.int32, [None, None], name="query_mask")
-            # character mask
-            self.char_mask = tf.placeholder(
-                tf.int32, [None, MAX_WORD_LEN], name="char_mask")
-            # character input
-            self.doc_char = tf.placeholder(
-                tf.int32, [None, None], name="doc_char")
-            self.qry_char = tf.placeholder(
-                tf.int32, [None, None], name="qry_char")
-            self.token = tf.placeholder(
-                tf.int32, [None, MAX_WORD_LEN], name="token")
-            # extra features, see GA Reader (Dhingra et al.) paper, "question evidence common word feature"
-            self.feat = tf.placeholder(
-                tf.int32, [None, None], name="features")
+        # word mask TODO: dtype could be changed to int8 or bool
+        self.doc_mask = tf.placeholder(
+            tf.int32, [None, None], name="doc_mask")
+        self.qry_mask = tf.placeholder(
+            tf.int32, [None, None], name="query_mask")
+        # character mask
+        self.char_mask = tf.placeholder(
+            tf.int32, [None, MAX_WORD_LEN], name="char_mask")
+        # character input
+        self.doc_char = tf.placeholder(
+            tf.int32, [None, None], name="doc_char")
+        self.qry_char = tf.placeholder(
+            tf.int32, [None, None], name="qry_char")
+        self.token = tf.placeholder(
+            tf.int32, [None, MAX_WORD_LEN], name="token")
+        # extra features, see GA Reader (Dhingra et al.) paper, "question evidence common word feature"
+        self.feat = tf.placeholder(
+            tf.int32, [None, None], name="features")
 
         self.pred_ans = tf.placeholder(tf.int32, [None, 2], name="predicted_answer")
         self.start_probs = tf.placeholder(tf.float32, [None, None], name="answer_start_probs")
@@ -104,57 +103,55 @@ class GAReader:
         self.learning_rate = tf.placeholder(tf.float32, name="learning_rate")
         self.keep_prob = tf.placeholder(tf.float32, name="keep_prob")
 
-        with tf.name_scope("Embeddings"):
-            # word embedding
-            if embed_init is None:
-                word_embedding = tf.get_variable(
-                    "word_embedding", [self.vocab_size, self.embed_dim],
-                    initializer=tf.glorot_normal_initializer(seed, tf.float32),
-                    trainable=self.train_emb)
-            else:
-                word_embedding = tf.Variable(embed_init, trainable=self.train_emb,
-                                             name="word_embedding")
-            doc_embed = tf.nn.embedding_lookup(
-                word_embedding, self.doc, name="document_embedding")
-            qry_embed = tf.nn.embedding_lookup(
-                word_embedding, self.qry, name="query_embedding")
-
-            # feature embedding
-            feature_embedding = tf.get_variable(
-                "feature_embedding", [2, 2],
-                initializer=tf.random_normal_initializer(stddev=0.1),
+        # word embedding
+        if embed_init is None:
+            word_embedding = tf.get_variable(
+                "word_embedding", [self.vocab_size, self.embed_dim],
+                initializer=tf.glorot_normal_initializer(seed, tf.float32),
                 trainable=self.train_emb)
-            feat_embed = tf.nn.embedding_lookup(
-                feature_embedding, self.feat, name="feature_embedding")
+        else:
+            word_embedding = tf.Variable(embed_init, trainable=self.train_emb,
+                                         name="word_embedding")
+        doc_embed = tf.nn.embedding_lookup(
+            word_embedding, self.doc, name="document_embedding")
+        qry_embed = tf.nn.embedding_lookup(
+            word_embedding, self.qry, name="query_embedding")
+
+        # feature embedding
+        feature_embedding = tf.get_variable(
+            "feature_embedding", [2, 2],
+            initializer=tf.random_normal_initializer(stddev=0.1),
+            trainable=self.train_emb)
+        feat_embed = tf.nn.embedding_lookup(
+            feature_embedding, self.feat, name="feature_embedding")
 
         # char embedding
         if self.use_chars:
-            with tf.name_scope("Character_Embeddings"):
-                char_embedding = tf.get_variable(
-                    "char_embedding", [self.n_chars, self.char_dim],
-                    initializer=tf.random_normal_initializer(stddev=0.1))
-                token_embed = tf.nn.embedding_lookup(char_embedding, self.token)
-                fw_gru = GRU(self.char_dim)
-                bk_gru = GRU(self.char_dim)
-                # fw_states/bk_states: [batch_size, gru_size]
-                # only use final state
-                seq_length = tf.reduce_sum(self.char_mask, axis=1)
-                _, (fw_final_state, bk_final_state) = \
-                    tf.nn.bidirectional_dynamic_rnn(
-                        fw_gru, bk_gru, token_embed, sequence_length=seq_length,
-                        dtype=tf.float32, scope="char_rnn")
-                fw_embed = tf.layers.dense(
-                    fw_final_state, self.embed_dim // 2)
-                bk_embed = tf.layers.dense(
-                    bk_final_state, self.embed_dim // 2)
-                merge_embed = fw_embed + bk_embed
-                doc_char_embed = tf.nn.embedding_lookup(
-                    merge_embed, self.doc_char, name="doc_char_embedding")
-                qry_char_embed = tf.nn.embedding_lookup(
-                    merge_embed, self.qry_char, name="query_char_embedding")
+            char_embedding = tf.get_variable(
+                "char_embedding", [self.n_chars, self.char_dim],
+                initializer=tf.random_normal_initializer(stddev=0.1))
+            token_embed = tf.nn.embedding_lookup(char_embedding, self.token)
+            fw_gru = GRU(self.char_dim)
+            bk_gru = GRU(self.char_dim)
+            # fw_states/bk_states: [batch_size, gru_size]
+            # only use final state
+            seq_length = tf.reduce_sum(self.char_mask, axis=1)
+            _, (fw_final_state, bk_final_state) = \
+                tf.nn.bidirectional_dynamic_rnn(
+                    fw_gru, bk_gru, token_embed, sequence_length=seq_length,
+                    dtype=tf.float32, scope="char_rnn")
+            fw_embed = tf.layers.dense(
+                fw_final_state, self.embed_dim // 2)
+            bk_embed = tf.layers.dense(
+                bk_final_state, self.embed_dim // 2)
+            merge_embed = fw_embed + bk_embed
+            doc_char_embed = tf.nn.embedding_lookup(
+                merge_embed, self.doc_char, name="doc_char_embedding")
+            qry_char_embed = tf.nn.embedding_lookup(
+                merge_embed, self.qry_char, name="query_char_embedding")
 
-                doc_embed = tf.concat([doc_embed, doc_char_embed], axis=2)
-                qry_embed = tf.concat([qry_embed, qry_char_embed], axis=2)
+            doc_embed = tf.concat([doc_embed, doc_char_embed], axis=2)
+            qry_embed = tf.concat([qry_embed, qry_char_embed], axis=2)
 
         self.attentions = []  # Saving for debugging reasons
         if self.save_attn:
@@ -165,26 +162,24 @@ class GAReader:
         # TODO: Document with comments extensively, refer to figures (cf.), name paper, link paper
         for i in range(self.n_layers - 1):
             # DOCUMENT
-            with tf.name_scope("Document"):
-                fw_doc = GRU(self.n_hidden)
-                bk_doc = GRU(self.n_hidden)
-                seq_length = tf.reduce_sum(self.doc_mask, axis=1)  # actual length of each doc
-                (fw_doc_states, bk_doc_states), _ = \
-                    tf.nn.bidirectional_dynamic_rnn(
-                        fw_doc, bk_doc, doc_embed, sequence_length=seq_length,
-                        dtype=tf.float32, scope="layer_{}_doc_rnn".format(i)) # TODO: turn off scope for cleaner tensorboard?
-                doc_bi_embed = tf.concat([fw_doc_states, bk_doc_states], axis=2)
+            fw_doc = GRU(self.n_hidden)
+            bk_doc = GRU(self.n_hidden)
+            seq_length = tf.reduce_sum(self.doc_mask, axis=1)  # actual length of each doc
+            (fw_doc_states, bk_doc_states), _ = \
+                tf.nn.bidirectional_dynamic_rnn(
+                    fw_doc, bk_doc, doc_embed, sequence_length=seq_length,
+                    dtype=tf.float32, scope="layer_{}_doc_rnn".format(i)) # TODO: turn off scope for cleaner tensorboard?
+            doc_bi_embed = tf.concat([fw_doc_states, bk_doc_states], axis=2)
 
             # QUERY
-            with tf.name_scope("Query"):
-                fw_qry = GRU(self.n_hidden)
-                bk_qry = GRU(self.n_hidden)
-                seq_length = tf.reduce_sum(self.qry_mask, axis=1)
-                (fw_qry_states, bk_qry_states), _ = \
-                    tf.nn.bidirectional_dynamic_rnn(
-                        fw_qry, bk_qry, qry_embed, sequence_length=seq_length,
-                        dtype=tf.float32, scope="{}_layer_qry_rnn".format(i))
-                qry_bi_embed = tf.concat([fw_qry_states, bk_qry_states], axis=2)
+            fw_qry = GRU(self.n_hidden)
+            bk_qry = GRU(self.n_hidden)
+            seq_length = tf.reduce_sum(self.qry_mask, axis=1)
+            (fw_qry_states, bk_qry_states), _ = \
+                tf.nn.bidirectional_dynamic_rnn(
+                    fw_qry, bk_qry, qry_embed, sequence_length=seq_length,
+                    dtype=tf.float32, scope="{}_layer_qry_rnn".format(i))
+            qry_bi_embed = tf.concat([fw_qry_states, bk_qry_states], axis=2)
 
             # Pairwise interaction (matrix multiplication)
             inter = pairwise_interaction(doc_bi_embed, qry_bi_embed)
@@ -201,23 +196,21 @@ class GAReader:
 
         # Final layer
         # Same as before but there is no gated attention
-        with tf.name_scope("Final_Layer_Document"):
-            fw_doc_final = GRU(self.n_hidden)
-            bk_doc_final = GRU(self.n_hidden)
-            seq_length = tf.reduce_sum(self.doc_mask, axis=1)
-            (fw_doc_states, bk_doc_states), _ = tf.nn.bidirectional_dynamic_rnn(
-                fw_doc_final, bk_doc_final, doc_embed, sequence_length=seq_length,
-                dtype=tf.float32, scope="final_doc_rnn")
-            doc_embed_final = tf.concat([fw_doc_states, bk_doc_states], axis=2)
+        fw_doc_final = GRU(self.n_hidden)
+        bk_doc_final = GRU(self.n_hidden)
+        seq_length = tf.reduce_sum(self.doc_mask, axis=1)
+        (fw_doc_states, bk_doc_states), _ = tf.nn.bidirectional_dynamic_rnn(
+            fw_doc_final, bk_doc_final, doc_embed, sequence_length=seq_length,
+            dtype=tf.float32, scope="final_doc_rnn")
+        doc_embed_final = tf.concat([fw_doc_states, bk_doc_states], axis=2)
 
-        with tf.name_scope("Final_Layer_Query"):
-            fw_qry_final = GRU(self.n_hidden)
-            bk_doc_final = GRU(self.n_hidden)
-            seq_length = tf.reduce_sum(self.qry_mask, axis=1)
-            (fw_qry_states, bk_qry_states), _ = tf.nn.bidirectional_dynamic_rnn(
-                fw_qry_final, bk_doc_final, qry_embed, sequence_length=seq_length,
-                dtype=tf.float32, scope="final_qry_rnn")
-            qry_embed_final = tf.concat([fw_qry_states, bk_qry_states], axis=2)
+        fw_qry_final = GRU(self.n_hidden)
+        bk_doc_final = GRU(self.n_hidden)
+        seq_length = tf.reduce_sum(self.qry_mask, axis=1)
+        (fw_qry_states, bk_qry_states), _ = tf.nn.bidirectional_dynamic_rnn(
+            fw_qry_final, bk_doc_final, qry_embed, sequence_length=seq_length,
+            dtype=tf.float32, scope="final_qry_rnn")
+        qry_embed_final = tf.concat([fw_qry_states, bk_qry_states], axis=2)
 
         inter = pairwise_interaction(doc_embed_final, qry_embed_final)
         if self.save_attn:
@@ -227,45 +220,42 @@ class GAReader:
         self.attention_tensors = tf.convert_to_tensor(self.attentions, dtype=tf.float32, name="attentions")
 
         # Attention Sum
-        with tf.name_scope("Prediction"):
-            # Transforming the final pairwise interaction matrix (between document and query)
-            # The interaction matrix is input into dense layers (1 for answer start- and 1 for end-index)
-            # The dense layer output is softmax'd then averaged across query words to obtain predictions.
-            self.pred = attention_sum(inter, self.n_hidden_dense, name="attention_sum")
-            self.start_probs = self.pred[0]
-            self.end_probs = self.pred[1]
-            start_pred_idx = tf.expand_dims(tf.argmax(self.pred[0], axis=1), axis=1)
-            end_pred_idx = tf.expand_dims(tf.argmax(self.pred[1], axis=1), axis=1)
+        # Transforming the final pairwise interaction matrix (between document and query)
+        # The interaction matrix is input into dense layers (1 for answer start- and 1 for end-index)
+        # The dense layer output is softmax'd then averaged across query words to obtain predictions.
+        self.pred = attention_sum(inter, self.n_hidden_dense, name="attention_sum")
+        self.start_probs = self.pred[0]
+        self.end_probs = self.pred[1]
+        start_pred_idx = tf.expand_dims(tf.argmax(self.pred[0], axis=1), axis=1)
+        end_pred_idx = tf.expand_dims(tf.argmax(self.pred[1], axis=1), axis=1)
 
-            self.pred_ans = tf.concat([start_pred_idx, end_pred_idx], axis=1)
+        self.pred_ans = tf.concat([start_pred_idx, end_pred_idx], axis=1)
 
-        with tf.name_scope("Loss"):
-            # TODO: Review if cross entropy is used correctly here
-            start_loss = tf.expand_dims(crossentropy(self.pred[0], self.answer[:, 0]), axis=1)
-            end_loss = tf.expand_dims(crossentropy(self.pred[1], self.answer[:, 1]), axis=1)
-            # TODO: Is it correct to average the losses on answer start- and end-index?
-            total_loss = tf.reduce_mean(
-                tf.concat([start_loss, end_loss], axis=1), axis=1)
-            self.loss = tf.reduce_mean(total_loss)
-        with tf.name_scope("Test"):
-            self.pred_ans = tf.cast(self.pred_ans, tf.int32)
-            self.test = tf.cast(
-                tf.equal(self.answer, self.pred_ans), tf.float32)
+        # TODO: Review if cross entropy is used correctly here
+        start_loss = tf.expand_dims(crossentropy(self.pred[0], self.answer[:, 0]), axis=1)
+        end_loss = tf.expand_dims(crossentropy(self.pred[1], self.answer[:, 1]), axis=1)
+        # TODO: Is it correct to average the losses on answer start- and end-index?
+        total_loss = tf.reduce_mean(
+            tf.concat([start_loss, end_loss], axis=1), axis=1)
+        self.loss = tf.reduce_mean(total_loss)
 
-        with tf.name_scope("Accuracy"):
-            self.accuracy = tf.reduce_sum(tf.cast(
-                tf.equal(self.answer, self.pred_ans), tf.float32))
-            # self.accuracy = tf.reduce_sum(self.accuracy)  # Not necessary since, it's already scalar
-            self.accuracy /= 2
-            self.acc_metric, self.acc_metric_update = tf.metrics.accuracy(
-                self.answer, self.pred_ans, name="accuracy_metric")
-            self.valid_acc_metric, self.valid_acc_metric_update = tf.metrics.accuracy(
-                self.answer, self.pred_ans, name="valid_accuracy_metric")
+        # TEST
+        self.pred_ans = tf.cast(self.pred_ans, tf.int32)
+        self.test = tf.cast(
+            tf.equal(self.answer, self.pred_ans), tf.float32)
+
+        self.accuracy = tf.reduce_sum(tf.cast(
+            tf.equal(self.answer, self.pred_ans), tf.float32))
+        # self.accuracy = tf.reduce_sum(self.accuracy)  # Not necessary since, it's already scalar
+        self.accuracy /= 2
+        self.acc_metric, self.acc_metric_update = tf.metrics.accuracy(
+            self.answer, self.pred_ans, name="accuracy_metric")
+        self.valid_acc_metric, self.valid_acc_metric_update = tf.metrics.accuracy(
+            self.answer, self.pred_ans, name="valid_accuracy_metric")
 
         vars_list = tf.trainable_variables()
 
-        with tf.name_scope("Train"):
-            optimizer = tf.train.AdamOptimizer(self.learning_rate)
+        optimizer = tf.train.AdamOptimizer(self.learning_rate)
 
         # gradient clipping
         grads, _ = tf.clip_by_global_norm(
@@ -305,7 +295,6 @@ class GAReader:
         tf.add_to_collection('answer_end_probs', self.end_probs)
         tf.add_to_collection('attentions', self.attention_tensors)
 
-    # Replace train inputs with one input, then unpack the tuple input within the definition.
     def train(self, sess, training_data, dropout, learning_rate, iteration, writer, epoch, max_it):
         """
         train model

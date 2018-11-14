@@ -199,13 +199,6 @@ def train(args):
                 loss_, acc_, updates_ = \
                     model.train(sess, training_data, args.drop_out, lr, it, writer, epoch, max_it)
 
-                # SQUAD_MOD
-                # attentions_ = np.array(attentions_)
-                # attentions_nonzero = attentions_[-1, -1, :, :]
-                # attentions_nonzero = \
-                #     attentions_nonzero[~np.all(attentions_nonzero==0, axis=1)][:, ~np.all(attentions_nonzero==0, axis=0)]
-                # SQUAD_MOD
-
                 loss += loss_
                 acc += acc_
                 it += 1
@@ -217,12 +210,6 @@ def train(args):
                     # Get estimated finish time in hours
                     eta = (spend / 60) * ((max_it - it) / args.print_every)
 
-                    # SQUAD_MOD
-                    # statement = "Size of model attentions: {}".format(attentions_.shape)
-                    # statement += "\nFull attention matrix:\n" + str(attentions_[-1, -1, :, :])
-                    # statement += "\nNon-zero part of attention matrix (shape: {}):".format(attentions_nonzero.shape) +\
-                    #              str(attentions_nonzero)
-                    # SQUAD_MOD
                     statement = "Epoch: {}, it: {} (max: {}), " \
                         .format(epoch, it, max_it)
                     statement += "loss: {:.3f}, acc: {:.3f}, " \

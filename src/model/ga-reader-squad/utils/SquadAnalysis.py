@@ -23,7 +23,7 @@ class Analyser:
         """
         # Generate predictions
         text_outputs, _, attentions_and_probs, _ = \
-            self.get_predictions(max_example=num_examples, epoch=14)
+            self.get_predictions(max_example=num_examples, epoch=10)
 
         ground_truth = text_outputs[2]
         predicted_answer = text_outputs[3]
