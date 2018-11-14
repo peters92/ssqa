@@ -23,7 +23,7 @@ class Analyser:
         """
         # Generate predictions
         text_outputs, _, attentions_and_probs, _ = \
-            self.get_predictions(max_example=num_examples, epoch=10)
+            self.get_predictions(max_example=num_examples, epoch=1)
 
         ground_truth = text_outputs[2]
         predicted_answer = text_outputs[3]
@@ -162,7 +162,7 @@ class Analyser:
               .format(max_example, batch_number))
 
         # Restore Model
-        default_path = "/scratch/s161027/run_data/visualization_test"
+        default_path = "/scratch/s161027/run_data/best_working_model"
         if save_dir is None:
             save_dir = os.path.join(default_path, "saved_models")
 

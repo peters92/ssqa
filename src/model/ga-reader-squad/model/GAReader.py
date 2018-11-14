@@ -1,3 +1,10 @@
+"""
+Gated-Attention Reader model, implemented according to the paper:
+"Gated-Attention Readers for Text Comprehension" by Bhuwan Dhingra/Hanxiao Liu et al.
+    arXiv:  1606.01549v3
+    github: https://github.com/bdhingra/ga-reader
+For the sake of brevity, unless otherwise stated all references saying "see paper" below refer to this paper.
+"""
 import tensorflow as tf
 from tensorflow.contrib.rnn import GRUCell as GRU
 import time
@@ -10,27 +17,34 @@ from model.layers import gated_attention,\
                                crossentropy
 from utils.Helpers import prepare_input
 
+# Maximum word length, used for limiting word lengths if using character model
 MAX_WORD_LEN = 10
 
 
 class GAReader:
-    def __init__(self, n_layers, vocab_size, n_chars,
-                 n_hidden, n_hidden_dense, embed_dim, train_emb, char_dim,
+    def __init__(self, n_layers, vocab_size, vocab_size_char,
+                 n_hidden, n_hidden_dense, embed_dim, train_emb, n_hidden_char,
                  use_feat, gating_fn, save_attn=False):
-        self.n_hidden = n_hidden
-        self.n_hidden_dense = n_hidden_dense
-        self.n_layers = n_layers
-        self.embed_dim = embed_dim
-        self.train_emb = train_emb
-        self.char_dim = char_dim
-        self.n_chars = n_chars
-        self.use_feat = use_feat
+        # Input variables
+        self.n_hidden = n_hidden                # The number of hidden units in the GRU cell
+        self.n_hidden_dense = n_hidden_dense    # The number of hidden units in the final dense layer
+        self.n_layers = n_layers                # The number of layers (or 'hops', see paper fig. 1) in the model
+        self.embed_dim = embed_dim              # The size of the initial embedding vectors (e.g. GloVe)
+        self.train_emb = train_emb              # Bool: train embeddings or not
+        self.use_qe_comm_feature = use_feat                # Bool: use qe-comm feature or not (see paper, section 3.1.4)
+        # The "activation" function at the end of the gated attention layer
+        # Default is tf.multiply()
         self.gating_fn = gating_fn
-        self.save_attn = save_attn
-        self.vocab_size = vocab_size
-        self.use_chars = self.char_dim != 0
+        self.save_attn = save_attn              # Bool: save attention matrices during forward pass or not
+        self.vocab_size = vocab_size            # Size of the word vocabulary (unique word tokens)
+
+        # Input (only for character model)
+        self.n_hidden_char = n_hidden_char      # The number of hidden units in the character GRU cell
+        self.vocab_size_char = vocab_size_char  # Number of different characters in vocabulary
+        self.use_chars = self.n_hidden_char != 0  # Bool: Whether or not to train a character model
 
         # Graph initialization
+        # See their explanation below in the build_graph() method
         self.doc = None
         self.qry = None
         self.answer = None
@@ -55,6 +69,7 @@ class GAReader:
         self.updates = None
 
         # Tensorboard variables
+        # Used to report accuracy and loss values to tensorboard during training/validation
         self.acc_metric = None
         self.acc_metric_update = None
         self.valid_acc_metric = None
@@ -65,42 +80,102 @@ class GAReader:
         self.merged_summary = None
 
     def build_graph(self, grad_clip, embed_init, seed, max_doc_len, max_qry_len):
-        # Defining inputs
-        self.doc = tf.placeholder(
-            tf.int32, [None, max_doc_len], name="doc")  # Document words
-        self.qry = tf.placeholder(
-            tf.int32, [None, max_qry_len], name="qry")  # Query words
+        # ===========================
+        # DEFINING GRAPH PLACEHOLDERS
+        # ===========================
 
-        # Answer looks like -> Batch_size * [answer_start_index, answer_end_index]
+        # Placeholder for integer representations of the document and query tokens.
+        # These are tensors of shape [batch_size, max_length] where max_length is the length of the longest
+        # document or query in the current batch.
+        self.doc = tf.placeholder(tf.int32, [None, max_doc_len], name="doc")  # Document words
+        self.qry = tf.placeholder(tf.int32, [None, max_qry_len], name="qry")  # Query words
+
+        # Placeholder for the ground truth answer's index in the document.
+        # A tensor of shape [batch_size, 2]
+        # The values refer to the answer's index in the document. Can be either the index among tokens or chars.
+        # [[answer_start_0, answer_end_0]
+        #  [answer_start_1, answer_end_1]
+        #  [............................]
+        #  [answer_start_n, answer_end_n]] - where n = batch_size
         self.answer = tf.placeholder(
             tf.int32, [None, 2], name="answer")
 
-        # word mask TODO: dtype could be changed to int8 or bool
+        # Placeholder for document and query masks.
+        # These are the same as the document and query placeholders above, except that they are binary,
+        # having 0's where there is no token, and 1 where there is.
+        # Example:
+        # Assuming max_doc_len = 4 and batch_size = 3
+        #              <---4---->                           <---4---->
+        # self.doc = [[2, 5, 4, 7]  ----> self.doc_mask = [[1, 1, 1, 1]  <-- document 1
+        #             [3, 2, 6, 0]                         [1, 1, 1, 0]  <-- document 2
+        #             [2, 1, 0, 0]]                        [1, 1, 0, 0]] <-- document 3
+        # The masks are used to calculate the sequence length of each text sample going into
+        # the bi-directional RNN.
         self.doc_mask = tf.placeholder(
-            tf.int32, [None, None], name="doc_mask")
+            tf.int32, [None, max_doc_len], name="doc_mask")
         self.qry_mask = tf.placeholder(
-            tf.int32, [None, None], name="query_mask")
-        # character mask
+            tf.int32, [None, max_qry_len], name="query_mask")
+
+        # Placeholder for character mask.
+        # It's a mask over all the unique words broken into characters in the current batch
+        # Example: word1 = [1, 2, 3, 4], word2 = [7, 3, 5], MAX_WORD_LEN = 6
+        #
+        #               <------6------->
+        # char_mask = [[1, 1, 1, 1, 0, 0]  <- word1
+        #              [1, 1, 1, 0, 0, 0]] <- word2
+        # Used for sequence length in the character bi-directional GRU
         self.char_mask = tf.placeholder(
             tf.int32, [None, MAX_WORD_LEN], name="char_mask")
-        # character input
+
+        # Placeholder for document and query character array.
+        # These tensors hold only the index of each word (as characters) in the unique word type dictionary
+        # Their shapes are [batch_size, max_length]
+        # See utils/MiniBatchLoader.py
+        # Example:
+        # max_doc_len = 4, batch_size = 3
+        #                   <---4---->
+        # self.doc_char = [[2, 5, 4, 7]  <-- document 1
+        #                  [3, 2, 6, 0]  <-- document 2
+        #                  [2, 1, 0, 0]] <-- document 3
+        #
         self.doc_char = tf.placeholder(
             tf.int32, [None, None], name="doc_char")
         self.qry_char = tf.placeholder(
             tf.int32, [None, None], name="qry_char")
+
+        # Placeholder for the type character array (unique word dictionary)
+        # Its shape is [unique_words_in_batch, max_word_length]
         self.token = tf.placeholder(
             tf.int32, [None, MAX_WORD_LEN], name="token")
-        # extra features, see GA Reader (Dhingra et al.) paper, "question evidence common word feature"
+
+        # qe-comm feature (see paper, section 3.1.4)
         self.feat = tf.placeholder(
             tf.int32, [None, None], name="features")
 
+        # The predicted answer span's indices in the document
+        # Its shape is [batch_size, 2]
+        # self.pred_ans = [[predicted_answer_start_0, predicted_answer_end_0]
+        #                  [predicted_answer_start_1, predicted_answer_end_1]
+        #                  [................................................]
+        #                  [predicted_answer_start_n, predicted_answer_end_n]] where batch_size = n
         self.pred_ans = tf.placeholder(tf.int32, [None, 2], name="predicted_answer")
+
+        # Probabilities of a document word being the start or the end of the answer.
+        # Shape is [batch_size, max_document_length], values range from (0-1)
         self.start_probs = tf.placeholder(tf.float32, [None, None], name="answer_start_probs")
         self.end_probs = tf.placeholder(tf.float32, [None, None], name="answer_end_probs")
+
+        # Placeholder for the attention matrices generated during forward passes of a document and a query.
+        # At the moment of writing, there are K+1 attention matrices saved in a forward pass:
+        # An initial one after embedding the document and query, then K during the subsequent K layers.
+        # Each attention matrix is shaped: [batch_size, max_document_length, max_query_length]
+        # so the shape of this tensor should be: [K+1, batch_size, max_document_length, max_query_length]
         self.attention_tensors = tf.placeholder(tf.float32, [None], name="attentions")
 
-        # model parameters
+        # Model parameters
+        # Initial learning rate
         self.learning_rate = tf.placeholder(tf.float32, name="learning_rate")
+        # Keep probability = 1 - dropout probability
         self.keep_prob = tf.placeholder(tf.float32, name="keep_prob")
 
         # word embedding
@@ -112,6 +187,7 @@ class GAReader:
         else:
             word_embedding = tf.Variable(embed_init, trainable=self.train_emb,
                                          name="word_embedding")
+
         doc_embed = tf.nn.embedding_lookup(
             word_embedding, self.doc, name="document_embedding")
         qry_embed = tf.nn.embedding_lookup(
@@ -128,11 +204,11 @@ class GAReader:
         # char embedding
         if self.use_chars:
             char_embedding = tf.get_variable(
-                "char_embedding", [self.n_chars, self.char_dim],
+                "char_embedding", [self.vocab_size_char, self.n_hidden_char],
                 initializer=tf.random_normal_initializer(stddev=0.1))
             token_embed = tf.nn.embedding_lookup(char_embedding, self.token)
-            fw_gru = GRU(self.char_dim)
-            bk_gru = GRU(self.char_dim)
+            fw_gru = GRU(self.n_hidden_char)
+            bk_gru = GRU(self.n_hidden_char)
             # fw_states/bk_states: [batch_size, gru_size]
             # only use final state
             seq_length = tf.reduce_sum(self.char_mask, axis=1)
@@ -164,7 +240,8 @@ class GAReader:
             # DOCUMENT
             fw_doc = GRU(self.n_hidden)
             bk_doc = GRU(self.n_hidden)
-            seq_length = tf.reduce_sum(self.doc_mask, axis=1)  # actual length of each doc
+            # The actual length of each document in the current batch
+            seq_length = tf.reduce_sum(self.doc_mask, axis=1)
             (fw_doc_states, bk_doc_states), _ = \
                 tf.nn.bidirectional_dynamic_rnn(
                     fw_doc, bk_doc, doc_embed, sequence_length=seq_length,
@@ -191,7 +268,7 @@ class GAReader:
             if self.save_attn:
                 self.attentions.append(inter)
 
-        if self.use_feat:
+        if self.use_qe_comm_feature:
             doc_embed = tf.concat([doc_embed, feat_embed], axis=2)
 
         # Final layer
@@ -223,7 +300,7 @@ class GAReader:
         # Transforming the final pairwise interaction matrix (between document and query)
         # The interaction matrix is input into dense layers (1 for answer start- and 1 for end-index)
         # The dense layer output is softmax'd then averaged across query words to obtain predictions.
-        self.pred = attention_sum(inter, self.n_hidden_dense, name="attention_sum")
+        self.pred = attention_sum(inter, self.n_hidden_dense)
         self.start_probs = self.pred[0]
         self.end_probs = self.pred[1]
         start_pred_idx = tf.expand_dims(tf.argmax(self.pred[0], axis=1), axis=1)
@@ -301,66 +378,70 @@ class GAReader:
         Args:
         - data: (object) containing training data
         """
-        dw, dt, qw, qt, a, m_dw, m_qw, tt, tm, fnames = training_data
+        document_array, document_character_array, query_array, query_character_array,\
+            answer_array, document_mask_array, query_mask_array, type_character_array,\
+            type_character_mask, filenames = training_data
 
-        feed_dict = {self.doc: dw, self.qry: qw,
-                     self.doc_char: dt, self.qry_char: qt,
-                     self.answer: a, self.doc_mask: m_dw,
-                     self.qry_mask: m_qw, self.token: tt,
-                     self.char_mask: tm, self.keep_prob: 1 - dropout,
+        feed_dict = {self.doc: document_array, self.qry: query_array,
+                     self.doc_char: document_character_array, self.qry_char: query_character_array,
+                     self.answer: answer_array, self.doc_mask: document_mask_array,
+                     self.qry_mask: query_mask_array, self.token: type_character_array,
+                     self.char_mask: type_character_mask, self.keep_prob: 1 - dropout,
                      self.learning_rate: learning_rate}
 
-        if self.use_feat:
-            feat = prepare_input(dw, qw)
-            feed_dict += {self.feat: feat}
+        if self.use_qe_comm_feature:
+            feature = prepare_input(document_array, query_array)
+            feed_dict += {self.feat: feature}
 
         if iteration % 10 == 0:  # Get updated summary for Tensorboard every 10th iteration
-            loss, acc, updates, merged_summ = sess.run([self.loss, self.accuracy,
-                                                        self.updates, self.merged_summary], feed_dict)
+            loss, accuracy, updates, merged_summ = sess.run([self.loss, self.accuracy,
+                                                             self.updates, self.merged_summary], feed_dict)
             # TODO: add merged summaries to writer, once they are done
             writer.add_summary(merged_summ, (epoch * max_it + iteration))
         else:  # Otherwise, get regular updates
-            loss, acc, updates = \
+            loss, accuracy, updates = \
                 sess.run([self.loss, self.accuracy,
                           self.updates], feed_dict)
 
-        return loss, acc, updates
+        return loss, accuracy, updates
 
     def validate(self, sess, valid_batch_loader,
                  iteration=None, writer=None,
                  epoch=None, max_it=None):
         """
-        test the model
+        Validate/Test the model
         """
-        loss = acc = n_example = 0
+        loss = accuracy = n_example = 0
         tr = trange(
             len(valid_batch_loader),
-            desc="loss: {:.3f}, acc: {:.3f}".format(0.0, 0.0),
+            desc="loss: {:.3f}, accuracy: {:.3f}".format(0.0, 0.0),
             leave=False,
             ascii=True)
-        start = time.time()
+        start_time = time.time()
         for validation_data in valid_batch_loader:
-            dw, dt, qw, qt, a, m_dw, m_qw, tt, tm, fnames = validation_data
+            document_array, document_character_array, query_array, query_character_array, answer_array,\
+                document_mask_array, query_mask_array, type_character_array, type_character_mask,\
+                filenames = validation_data
 
-            feed_dict = {self.doc: dw, self.qry: qw,
-                         self.doc_char: dt, self.qry_char: qt,
-                         self.answer: a, self.doc_mask: m_dw,
-                         self.qry_mask: m_qw, self.token: tt,
-                         self.char_mask: tm, self.keep_prob: 1.,
+            feed_dict = {self.doc: document_array, self.qry: query_array,
+                         self.doc_char: document_character_array, self.qry_char: query_character_array,
+                         self.answer: answer_array, self.doc_mask: document_mask_array,
+                         self.qry_mask: query_mask_array, self.token: type_character_array,
+                         self.char_mask: type_character_mask, self.keep_prob: 1.,
                          self.learning_rate: 0.}
 
-            if self.use_feat:
-                feat = prepare_input(dw, qw)
-                feed_dict += {self.feat: feat}
+            if self.use_qe_comm_feature:
+                feature = prepare_input(document_array, query_array)
+                feed_dict += {self.feat: feature}
 
-            _loss, _acc, valid_acc_summary = \
+            _loss, _accuracy, valid_acc_summary = \
                 sess.run([self.loss, self.accuracy, self.valid_acc_summ], feed_dict)
 
-            n_example += dw.shape[0]
+            n_example += document_array.shape[0]
             loss += _loss
-            acc += _acc
-            tr.set_description("loss: {:.3f}, acc: {:.3f}".
-                               format(_loss, _acc / dw.shape[0]))
+            accuracy += _accuracy
+            tr.set_description("loss: {:.3f}, accuracy: {:.3f}".
+                               format(_loss, _accuracy / document_array.shape[0]))
             tr.update()
 
         tr.close()
@@ -368,33 +449,37 @@ class GAReader:
             writer.add_summary(valid_acc_summary, (epoch * max_it + iteration))
 
         loss /= n_example
-        acc /= n_example
-        spend = (time.time() - start) / 60
-        statement = "loss: {:.3f}, acc: {:.3f}, time: {:.1f}(m)" \
-            .format(loss, acc, spend)
+        accuracy /= n_example
+        time_spent = (time.time() - start_time) / 60
+        statement = "loss: {:.3f}, accuracy: {:.3f}, time: {:.1f}(m)" \
+            .format(loss, accuracy, time_spent)
         logging.info(statement)
-        return loss, acc
+        return loss, accuracy
 
     def predict(self, sess, batch_loader):
 
         output = []
         for samples in batch_loader:
-            dw, dt, qw, qt, a, m_dw, m_qw, tt, tm, fnames = samples
+            document_array, document_character_array, query_array, query_character_array, answer_array,\
+                document_mask_array, query_mask_array, type_character_array, type_character_mask,\
+                filenames = samples
 
-            feed_dict = {self.doc: dw, self.qry: qw,
-                         self.doc_char: dt, self.qry_char: qt,
-                         self.answer: a, self.doc_mask: m_dw,
-                         self.qry_mask: m_qw, self.token: tt,
-                         self.char_mask: tm, self.keep_prob: 1.,
+            feed_dict = {self.doc: document_array, self.qry: query_array,
+                         self.doc_char: document_character_array, self.qry_char: query_character_array,
+                         self.answer: answer_array, self.doc_mask: document_mask_array,
+                         self.qry_mask: query_mask_array, self.token: type_character_array,
+                         self.char_mask: type_character_mask, self.keep_prob: 1.,
                          self.learning_rate: 0.}
 
-            doc, qry, answer, pred_ans, start_probs, end_probs, attention_tensors = \
-                sess.run([self.doc, self.qry, self.answer, self.pred_ans,
-                          self.start_probs, self.end_probs,
-                          self.attention_tensors], feed_dict)
-            output.append((doc, qry, answer,
-                           pred_ans, start_probs,
-                           end_probs, attention_tensors))
+            document, query, answer,\
+                predicted_answer, answer_start_probabilities,\
+                answer_end_probabilities, attention_tensors = sess.run([self.doc, self.qry, self.answer,
+                                                                        self.pred_ans, self.start_probs,
+                                                                        self.end_probs, self.attention_tensors],
+                                                                       feed_dict)
+            output.append((document, query, answer,
+                           predicted_answer, answer_start_probabilities,
+                           answer_end_probabilities, attention_tensors))
 
         return output
 
@@ -430,7 +515,6 @@ class GAReader:
         self.start_probs = tf.get_collection('answer_start_probs')[0]
         self.end_probs = tf.get_collection('answer_end_probs')[0]
         self.use_chars = tf.get_collection('use_chars')[0]
-        # TODO: Re-enable
         self.attention_tensors = tf.get_collection('attentions')[0]
 
     def save(self, sess, saver, checkpoint_dir, epoch):

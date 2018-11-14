@@ -125,12 +125,12 @@ def train(args):
 
     # Fixing the max. document and query length
     # Currently the max. is the same across all batches
-    max_doc_len = max([train_batch_loader.max_doc_len,
-                       valid_batch_loader.max_doc_len,
-                       test_batch_loader.max_doc_len])
-    max_qry_len = max([train_batch_loader.max_qry_len,
-                       valid_batch_loader.max_qry_len,
-                       test_batch_loader.max_qry_len])
+    max_doc_len = max([train_batch_loader.max_document_length,
+                       valid_batch_loader.max_document_length,
+                       test_batch_loader.max_document_length])
+    max_qry_len = max([train_batch_loader.max_query_length,
+                       valid_batch_loader.max_query_length,
+                       test_batch_loader.max_query_length])
 
     if not args.resume:
         # Loading the GLoVE vectors

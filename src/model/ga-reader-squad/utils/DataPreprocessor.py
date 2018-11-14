@@ -145,9 +145,9 @@ class DataPreprocessor:
         raw = open(fname).readlines()
 
         # Using nltk to tokenize input
-        doc_raw = nltk.word_tokenize(raw[2])  # document
-        qry_raw = nltk.word_tokenize(raw[4])  # query
-        ans_raw = nltk.word_tokenize(raw[6])  # answer
+        document_raw = nltk.word_tokenize(raw[2])  # document
+        query_raw = nltk.word_tokenize(raw[4])  # query
+        answer_raw = nltk.word_tokenize(raw[6])  # answer
 
         # In case a paragraph has extra new lines ("\n") breaking the indexing,
         # we remove them from the dataset
@@ -162,25 +162,26 @@ class DataPreprocessor:
             return (0,)
 
         # wrap the query with special symbols
-        qry_raw.insert(0, SYMB_BEGIN)
-        qry_raw.append(SYMB_END)
+        query_raw.insert(0, SYMB_BEGIN)
+        query_raw.append(SYMB_END)
 
         # tokens/entities --> indexes
-        doc_words = [w_dict[w] for w in doc_raw]
-        qry_words = [w_dict[w] for w in qry_raw]
+        document_words = [w_dict[w] for w in document_raw]
+        query_words = [w_dict[w] for w in query_raw]
         if use_chars:
-            doc_chars = [[c_dict.get(c, c_dict[' ']) for c in list(w)[:MAX_WORD_LEN]] for w in doc_raw]
-            qry_chars = [[c_dict.get(c, c_dict[' ']) for c in list(w)[:MAX_WORD_LEN]] for w in qry_raw]
-            ans_start = ans_start_char
-            ans_end = ans_end_char
+            document_characters = [[c_dict.get(c, c_dict[' ']) for c in list(w)[:MAX_WORD_LEN]] for w in document_raw]
+            query_characters = [[c_dict.get(c, c_dict[' ']) for c in list(w)[:MAX_WORD_LEN]] for w in query_raw]
+            answer_start = ans_start_char
+            answer_end = ans_end_char
         else:
-            doc_chars, qry_chars = [], []
-            ans_start = ans_start_token
-            ans_end = ans_end_token
+            document_characters, query_characters = [], []
+            answer_start = ans_start_token
+            answer_end = ans_end_token
 
-        ans = [w_dict[w] for w in ans_raw]
-        return doc_words, qry_words, ans, doc_chars, qry_chars, \
-               ans_start, ans_end
+        answer = [w_dict[w] for w in answer_raw]
+
+        return document_words, query_words, answer, document_characters, query_characters, \
+            answer_start, answer_end
 
     def parse_all_files(self, directory, dictionary,
                         max_example, use_chars, test_run=False):

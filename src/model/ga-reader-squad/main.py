@@ -114,12 +114,12 @@ def train(args):
 
     # Fixing the max. document and query length
     # Currently the max. is the same across all batches
-    max_doc_len = max([train_batch_loader.max_doc_len,
-                       valid_batch_loader.max_doc_len,
-                       test_batch_loader.max_doc_len])
-    max_qry_len = max([train_batch_loader.max_qry_len,
-                       valid_batch_loader.max_qry_len,
-                       test_batch_loader.max_qry_len])
+    max_doc_len = max([train_batch_loader.max_document_length,
+                       valid_batch_loader.max_document_length,
+                       test_batch_loader.max_document_length])
+    max_qry_len = max([train_batch_loader.max_query_length,
+                       valid_batch_loader.max_query_length,
+                       test_batch_loader.max_query_length])
 
     if not args.resume:
         # Loading the GLoVE vectors
@@ -179,7 +179,7 @@ def train(args):
 
         # Start training loop
         for epoch in epoch_range:
-            start = time.time()
+            start_time = time.time()
             it = loss = acc = n_example = 0
             if epoch >= 2:
                 lr /= 2
@@ -206,9 +206,9 @@ def train(args):
 
                 if it % args.print_every == 0 or \
                         it % max_it == 0:
-                    spend = (time.time() - start) / 60
+                    time_spent = (time.time() - start_time) / 60
                     # Get estimated finish time in hours
-                    eta = (spend / 60) * ((max_it - it) / args.print_every)
+                    eta = (time_spent / 60) * ((max_it - it) / args.print_every)
 
                     statement = "Epoch: {}, it: {} (max: {}), " \
                         .format(epoch, it, max_it)
@@ -216,12 +216,12 @@ def train(args):
                         .format(loss / args.print_every,
                                 acc / n_example)
                     statement += "time: {:.1f}(m), " \
-                        .format(spend)
+                        .format(time_spent)
                     statement += "ETA: {:.1f} hours" \
                         .format(eta)
                     logging.info(statement)
                     loss = acc = n_example = 0
-                    start = time.time()
+                    start_time = time.time()
                 # Validate, and save model
                 if it % args.eval_every == 0 or \
                         it % max_it == 0:
@@ -239,7 +239,7 @@ def train(args):
                             best_acc))
                         best_acc = valid_acc
                         # model.save(sess, saver, args.save_dir, epoch)
-                    start = time.time()
+                    start_time = time.time()
             # Save model at end of epoch
             model.save(sess, saver, args.save_dir, epoch)
         # test model
