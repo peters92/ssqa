@@ -38,7 +38,7 @@ class GAReader:
         """
         # word input
         self.doc = tf.placeholder(
-            tf.int32, [None, None], name="doc")
+            tf.int32, [None, None], name="document")
         self.qry = tf.placeholder(
             tf.int32, [None, None], name="query")
         self.cand = tf.placeholder(
@@ -194,7 +194,7 @@ class GAReader:
         """
         for restoring model
         """
-        tf.add_to_collection('doc', self.doc)
+        tf.add_to_collection('document', self.doc)
         tf.add_to_collection('qry', self.qry)
         tf.add_to_collection('doc_char', self.doc_char)
         tf.add_to_collection('qry_char', self.qry_char)
@@ -282,7 +282,7 @@ class GAReader:
         loader.restore(sess, checkpoint_path)
         logging.info("model restored from {}".format(checkpoint_path))
         # restore variables from checkpoint
-        self.doc = tf.get_collection('doc')[0]
+        self.doc = tf.get_collection('document')[0]
         self.qry = tf.get_collection('qry')[0]
         self.doc_char = tf.get_collection('doc_char')[0]
         self.qry_char = tf.get_collection('qry_char')[0]

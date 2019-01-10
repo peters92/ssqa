@@ -13,7 +13,7 @@ import tensorflow as tf
 # D - dimensionality of embeddings
 
 def gated_attention(doc, qry, inter, mask, gating_fn='tf.multiply', name="Gated_Attention_Layer"):
-    # doc: B x N x D
+    # document: B x N x D
     # qry: B x Q x D
     # inter: B x N x Q
     # mask (qry): B x Q
@@ -25,14 +25,14 @@ def gated_attention(doc, qry, inter, mask, gating_fn='tf.multiply', name="Gated_
         # Normalize values after masking
         alphas_r = alphas_r / \
             tf.expand_dims(tf.reduce_sum(alphas_r, axis=2), axis=-1)  # B x N x Q
-        # Calculating the actual (doc)token-specific representation of the query
+        # Calculating the actual (document)token-specific representation of the query
         q_rep = tf.matmul(alphas_r, qry)  # B x N x D
 
         return eval(gating_fn)(doc, q_rep)
 
 
 def pairwise_interaction(doc, qry, name="Pairwise_Interaction_Layer"):
-    # doc: B x N x D
+    # document: B x N x D
     # qry: B x Q x D
     with tf.name_scope(name):
         shuffled = tf.transpose(qry, perm=[0, 2, 1])  # B x D x Q
@@ -79,7 +79,7 @@ def attention_sum(inter, n_hidden_dense, name="Attention_Sum_Layer"):
 
 def attention_sum_cloze(doc, qry, cand, cloze, cand_mask=None, name="Attention_Sum_Layer"):
     # For cloze-style QA
-    # doc: B x N x D
+    # document: B x N x D
     # qry: B x Q x D
     # cand: B x N x C
     # cloze: B x 1
@@ -91,7 +91,7 @@ def attention_sum_cloze(doc, qry, cand, cloze, cand_mask=None, name="Attention_S
              tf.expand_dims(cloze, axis=1)], axis=1)
         # Retrieve hidden representation of cloze in query for each sample in batch
         q = tf.gather_nd(qry, idx)  # B x D
-        # Matrix multiply cloze representation with each doc word representation
+        # Matrix multiply cloze representation with each document word representation
         p = tf.squeeze(
             tf.matmul(doc, tf.expand_dims(q, axis=-1)), axis=-1)  # B x N
         # Take the softmax of the above and mask it, so it's zero where
@@ -104,7 +104,7 @@ def attention_sum_cloze(doc, qry, cand, cloze, cand_mask=None, name="Attention_S
     # Matrix multiply by the candidate markers
     # This masks out all the non-relevant words in the document, keeping only
     # the candidates. Also keeps them in their original order 1 to C (max_num_cand)
-    # Technically allows a candidate to show up multiple times in the doc, and
+    # Technically allows a candidate to show up multiple times in the document, and
     # adds up the respective softmax values for that candidate.
         return tf.squeeze(
             tf.matmul(pm, tf.cast(cand, tf.float32)), axis=1)  # B x C

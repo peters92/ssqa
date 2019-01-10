@@ -24,7 +24,7 @@ class MiniBatchLoader:
         # Otherwise if we are predicting only, use only one bin
         if prediction_only is None:
             self.bins = self.build_bins(self.questions)
-        else:  # Return a dict with the max doc length and all question indices
+        else:  # Return a dict with the max document length and all question indices
             indices = [index for index, value in enumerate(self.questions)]
             self.bins = {self.max_document_length: indices}
 
@@ -158,7 +158,7 @@ class MiniBatchLoader:
 
             filenames[n] = current_filename
 
-        # create type character matrix and indices for doc, qry
+        # create type character matrix and indices for document, query
         # document token index
         document_character_array = np.zeros(
             (current_batch_size, current_max_document_length),

@@ -52,7 +52,7 @@ class Analyser:
 
     def draw_svg(self, doc, qry, ground_truth, predicted_answer, attention, suffix):
         """
-        This method prints the input doc, qry into a .svg file. The document paragraph is
+        This method prints the input document, query into a .svg file. The document paragraph is
         colored according to the input attention.
         The supplied svg file will be saved with the given suffix (default=None).
         """
@@ -170,7 +170,7 @@ class Analyser:
         GAReader.restore(self, sess, save_dir, epoch)  # Restore model and graph
 
         # Numeric output from the prediction is a list of tuples like:
-        # (doc, qry, answer, pred_ans, start_probs, end_probs, attention_tensors)
+        # (document, query, answer, predicted_answer, start_probs, end_probs, attention_tensors)
         # Check the 'predict' method in GAReader.py for exact output.
         with sess:
             # Logging
@@ -182,7 +182,7 @@ class Analyser:
 
         # Based on the dictionary, turn the embeddings back into text
         # Text output is a tuple such as:
-        # (doc, qry, ground_truth, predicted_answer)
+        # (document, query, ground_truth, predicted_answer)
         # Where the elements of this tuple are lists of strings.
         text_output = self.inverse_dictionary(numeric_output,
                                               data.dictionary)
@@ -231,11 +231,11 @@ class Analyser:
 
     def mask_numeric_output(self, numeric_input):
         """
-        This method takes the numeric output from a GAReader prediction containing doc, qry,
+        This method takes the numeric output from a GAReader prediction containing document, query,
         answer start and end index probabilities and attention matrices.
         According to the document and query size (the non-zero part),
         it masks the attention matrices to be in shape: [doc_size x query_size]
-        Whereas the original attention matrix shape is: [N x Q] (max. doc. by max. query length)
+        Whereas the original attention matrix shape is: [N x Q] (max. document. by max. query length)
         The answer start and end index probabilities are also masked the same way by the actual
         document length.
         """

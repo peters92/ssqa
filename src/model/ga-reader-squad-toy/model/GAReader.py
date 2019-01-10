@@ -171,7 +171,7 @@ class GAReader:
             with tf.name_scope("Document"):
                 fw_doc = GRU(self.n_hidden)
                 bk_doc = GRU(self.n_hidden)
-                seq_length = tf.reduce_sum(self.doc_mask, axis=1)  # actual length of each doc
+                seq_length = tf.reduce_sum(self.doc_mask, axis=1)  # actual length of each document
                 (fw_doc_states, bk_doc_states), _ = \
                     tf.nn.bidirectional_dynamic_rnn(
                         fw_doc, bk_doc, doc_embed, sequence_length=seq_length,

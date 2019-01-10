@@ -171,13 +171,19 @@ class DataPreprocessor:
         if use_chars:
             document_characters = [[c_dict.get(c, c_dict[' ']) for c in list(w)[:MAX_WORD_LEN]] for w in document_raw]
             query_characters = [[c_dict.get(c, c_dict[' ']) for c in list(w)[:MAX_WORD_LEN]] for w in query_raw]
-            answer_start = ans_start_char
-            answer_end = ans_end_char
+
+            # TODO: commented out because it is not needed
+            # answer_start = ans_start_char
+            # answer_end = ans_end_char
         else:
             document_characters, query_characters = [], []
-            answer_start = ans_start_token
-            answer_end = ans_end_token
+            # TODO: commented out because it is not needed, answer index is the same
+            # answer_start = ans_start_token
+            # answer_end = ans_end_token
 
+        answer_start = ans_start_token
+        answer_end = ans_end_token
+        
         answer = [w_dict[w] for w in answer_raw]
 
         return document_words, query_words, answer, document_characters, query_characters, \
@@ -195,7 +201,7 @@ class DataPreprocessor:
             all_files = random.sample(all_files, max_example)
         # If it's a test run we limit the amount of samples in the batch
         if test_run:
-            all_files = all_files[:100]
+            all_files = random.sample(all_files, 100)
 
         # Wrap iterable for progress bar
         all_files = tqdm(all_files, leave=True, ascii=True, ncols=100)

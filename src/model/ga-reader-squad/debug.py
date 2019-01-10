@@ -1,8 +1,11 @@
-from utils.SquadAnalysis import Analyser
+from data.ssqa_processing import ssqa_parser
 
-analyser = Analyser()
+data_path = "/scratch/s161027/ga_reader_data/ssqa"
+filenames = ["dev-v1.1.json", "test-p0.1.json",
+             "train-p0.1.json", "train-p0.2.json",
+             "train-p0.5.json", "train-p0.9.json",
+             "unlabeled-data.small.json", "unlabeled-data.large.json"]
 
-# This will create num_examples amount of .svg files with paragraph
-# colored according to attention. The files will also contain the query,
-# ground truth, predicted answer and also gradient color scale for reference.
-analyser.visualize_attention(num_examples=10, file_suffix="TEMP")
+for filename in filenames:
+    print("Parsing {}...".format(filename))
+    ssqa_parser(data_path, filename)

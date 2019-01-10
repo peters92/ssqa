@@ -3,7 +3,7 @@ from utils.SquadAnalysis import Analyser
 analyser = Analyser()
 
 text_outputs, numeric_output, attentions_and_probs, batch_number = \
-    analyser.get_predictions(max_example=2, epoch=14)
+    analyser.get_predictions(max_example=10, epoch=3)
 
 previous_doc = []
 doc = text_outputs[0]
