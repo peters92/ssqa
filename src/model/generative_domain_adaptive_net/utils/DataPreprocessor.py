@@ -3,7 +3,8 @@ from tqdm import tqdm, trange
 import glob
 import os
 import random
-from utils.Helpers import SYMB_BEGIN,\
+from utils.Helpers import SYMB_PLACEHOLDER, \
+                          SYMB_BEGIN,\
                           SYMB_END, \
                           SYMB_PAD
 MAX_WORD_LEN = 10
@@ -42,7 +43,7 @@ class DataPreprocessor:
         dictionary = (word_dictionary, char_dictionary)
 
         print("preparing training data ...")
-        training = self.parse_all_files(question_dir + "/train-p0.5.json",
+        training = self.parse_all_files(question_dir + "/train-p0.9.json",
                                         dictionary, max_example,
                                         use_chars, only_test_run)
 
@@ -74,7 +75,7 @@ class DataPreprocessor:
             fnames = []
             fnames += glob.glob(question_dir + "/test-p0.1.json/*.question")
             fnames += glob.glob(question_dir + "/dev-v1.1.json/*.question")
-            fnames += glob.glob(question_dir + "/train-p0.5.json/*.question")
+            fnames += glob.glob(question_dir + "/train-p0.9.json/*.question")
             vocab_set = set()
 
             # Progress bar
@@ -98,11 +99,13 @@ class DataPreprocessor:
             tr.close()
             entities = set(e for e in vocab_set if e.startswith('@entity'))
 
-            # @placehoder, @begin and @end are included in the vocabulary list
+            # @placehoder, @begin, @end and @pad are included in the
+            # vocabulary list
             tokens = vocab_set.difference(entities)
             tokens.add(SYMB_PLACEHOLDER)
             tokens.add(SYMB_BEGIN)
             tokens.add(SYMB_END)
+            tokens.add(SYMB_PAD)
 
             vocabularies = list(entities)+list(tokens)
             print("writing vocabularies to " + vocab_file + " ...")
@@ -112,15 +115,6 @@ class DataPreprocessor:
 
         vocab_size = len(vocabularies)
 
-        # Create word dictionary which looks like this:
-        # {"example_word": 1,
-        #  "example_2":    2,
-        #        ......
-        #  "last_word":    vocab_size+1}
-        #
-        # The dictionary values start at 1 and not 0, so that later we can reserve
-        # the number 0 for marking empty parts of arrays which are beyond
-        # the max. document length. TODO: Re-enable
         word_dictionary = dict(zip(vocabularies, range(vocab_size)))
         char_set = set([c for w in vocabularies for c in list(w)])
         char_set.add(' ')

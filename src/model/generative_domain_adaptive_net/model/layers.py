@@ -125,57 +125,91 @@ def crossentropy(prediction, target):
     return - tf.log(prob)
 
 
-def encoder_layer_old(rnn_cell, n_layers, document_mask, document_embedding,
-                  n_hidden_encoder, max_doc_len, keep_probability):
-    """
-    Encoder layer for simple seq2seq model. Encodes the received document and returns the hidden states.
-    :return: encoded document embedding hidden states as tuple of shape=(n_layers,)
-    """
-    encoder_states = []
-    # Generate the n_layers of the encoder. States are not overwritten but saved individually in a tuple
-    # to be passed on to the decoder. (Where dynamic decode requires the states as a tuple!)
+# def encoder_layer_old(rnn_cell, n_layers, document_mask, document_embedding,
+#                   n_hidden_encoder, max_doc_len, keep_probability):
+#     """
+#     Encoder layer for simple seq2seq model. Encodes the received document and returns the hidden states.
+#     :return: encoded document embedding hidden states as tuple of shape=(n_layers,)
+#     """
+#     encoder_states = []
+#     # Generate the n_layers of the encoder. States are not overwritten but saved individually in a tuple
+#     # to be passed on to the decoder. (Where dynamic decode requires the states as a tuple!)
+#     for i in range(n_layers):
+#         # --------------------
+#         #  BI-DIRECTIONAL GRU
+#         # --------------------
+#         # Define the GRU cells used for the forward and backward document sequence
+#         # Also apply dropout individually
+#         forward_document_cell = rnn_cell(n_hidden_encoder)
+#         forward_document_cell = tf.contrib.rnn.DropoutWrapper(forward_document_cell,
+#                                                          input_keep_prob=keep_probability)
+#         backward_document_cell = rnn_cell(n_hidden_encoder)
+#         backward_document_cell = tf.contrib.rnn.DropoutWrapper(backward_document_cell,
+#                                                           input_keep_prob=keep_probability)
+#         # Get the actual length of documents in the current batch
+#         sequence_length = tf.reduce_sum(document_mask, axis=1)
+#
+#         # Pass the document through the Bi-GRU (see figure 1 in paper, x_1 to x_T on horizontal arrows)
+#         (forward_document_output, backward_document_output),\
+#             (forward_document_state, backward_document_state) = \
+#             tf.nn.bidirectional_dynamic_rnn(
+#                 forward_document_cell, backward_document_cell, document_embedding, sequence_length=sequence_length,
+#                 dtype=tf.float32, scope="layer_{}_doc_rnn".format(i))
+#         # Concatenate the output from the Bi-GRU, see eq. 1 and 2 in paper
+#         document_bi_embedding = tf.concat([forward_document_output, backward_document_output],
+#                                           axis=2, name="encoder_output_{}".format(i))
+#         document_bi_states = tf.concat([forward_document_state, backward_document_state],
+#                                        axis=1, name="encoder_state_{}".format(i))
+#
+#         # Assert shape of document_bi_embedding
+#         assert document_bi_embedding.shape.as_list() == [None, max_doc_len, 2 * n_hidden_encoder], \
+#             "Expected document_bi_embedding shape [None, {}, {}] but got {}".format(
+#                 max_doc_len, 2 * n_hidden_encoder, document_bi_embedding.shape)
+#         # Assert shape of document_bi_states
+#         assert document_bi_states.shape.as_list() == [None, 2 * n_hidden_encoder], \
+#             "Expected document_bi_embedding shape [None, {}] but got {}".format(2 * n_hidden_encoder,
+#                                                                                 document_bi_states.shape)
+#
+#         encoder_states.append(document_bi_states)
+#         document_embedding = document_bi_embedding
+#
+#     encoder_output = document_bi_embedding
+#
+#     return encoder_output, tuple(encoder_states)
+
+
+# Alternate encoder layer, only forward reading
+def bidirectional_encoder_layer(rnn_cell, n_layers, document_mask, document_embedding,
+                                n_hidden_encoder, max_doc_len, keep_probability):
+
+    sequence_length = tf.reduce_sum(document_mask, axis=1)
+
+    encoder_states_list = []
+
     for i in range(n_layers):
-        # --------------------
-        #  BI-DIRECTIONAL GRU
-        # --------------------
-        # Define the GRU cells used for the forward and backward document sequence
-        # Also apply dropout individually
-        forward_document_cell = rnn_cell(n_hidden_encoder)
-        forward_document_cell = tf.contrib.rnn.DropoutWrapper(forward_document_cell,
-                                                         input_keep_prob=keep_probability)
-        backward_document_cell = rnn_cell(n_hidden_encoder)
-        backward_document_cell = tf.contrib.rnn.DropoutWrapper(backward_document_cell,
-                                                          input_keep_prob=keep_probability)
-        # Get the actual length of documents in the current batch
-        sequence_length = tf.reduce_sum(document_mask, axis=1)
+        with tf.variable_scope('encoder_layer_{}'.format(i)):
+            encoder_cell_forward = rnn_cell(n_hidden_encoder)
+            encoder_cell_backward = rnn_cell(n_hidden_encoder)
 
-        # Pass the document through the Bi-GRU (see figure 1 in paper, x_1 to x_T on horizontal arrows)
-        (forward_document_output, backward_document_output),\
-            (forward_document_state, backward_document_state) = \
-            tf.nn.bidirectional_dynamic_rnn(
-                forward_document_cell, backward_document_cell, document_embedding, sequence_length=sequence_length,
-                dtype=tf.float32, scope="layer_{}_doc_rnn".format(i))
-        # Concatenate the output from the Bi-GRU, see eq. 1 and 2 in paper
-        document_bi_embedding = tf.concat([forward_document_output, backward_document_output],
-                                          axis=2, name="encoder_output_{}".format(i))
-        document_bi_states = tf.concat([forward_document_state, backward_document_state],
-                                       axis=1, name="encoder_state_{}".format(i))
+            encoder_cell_forward = tf.contrib.rnn.DropoutWrapper(encoder_cell_forward,
+                                                                 input_keep_prob=keep_probability)
+            encoder_cell_backward = tf.contrib.rnn.DropoutWrapper(encoder_cell_backward,
+                                                                  input_keep_prob=keep_probability)
 
-        # Assert shape of document_bi_embedding
-        assert document_bi_embedding.shape.as_list() == [None, max_doc_len, 2 * n_hidden_encoder], \
-            "Expected document_bi_embedding shape [None, {}, {}] but got {}".format(
-                max_doc_len, 2 * n_hidden_encoder, document_bi_embedding.shape)
-        # Assert shape of document_bi_states
-        assert document_bi_states.shape.as_list() == [None, 2 * n_hidden_encoder], \
-            "Expected document_bi_embedding shape [None, {}] but got {}".format(2 * n_hidden_encoder,
-                                                                                document_bi_states.shape)
+            encoder_output, encoder_states = \
+                tf.nn.bidirectional_dynamic_rnn(encoder_cell_forward,
+                                                encoder_cell_backward,
+                                                document_embedding,
+                                                sequence_length,
+                                                dtype=tf.float32)
 
-        encoder_states.append(document_bi_states)
-        document_embedding = document_bi_embedding
+            encoder_states = tf.concat([encoder_states[0], encoder_states[1]], axis=1)
+            encoder_states_list.append(encoder_states)
 
-    encoder_output = document_bi_embedding
+    encoder_output = tf.concat(encoder_output, 2)
+    encoder_states = tuple(encoder_states_list)
 
-    return encoder_output, tuple(encoder_states)
+    return encoder_output, encoder_states
 
 
 # Alternate encoder layer, only forward reading

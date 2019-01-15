@@ -9,6 +9,7 @@ import os
 import logging
 from tqdm import trange
 from model.layers import encoder_layer,\
+                         bidirectional_encoder_layer, \
                          decoder_layer,\
                          crossentropy
 from utils.Helpers import calculate_accuracies,\
@@ -191,8 +192,8 @@ class Seq2Seq:
         # -----------------------------------------
 
         encoder_output, encoder_states = \
-            encoder_layer(GRU, self.n_layers, self.document_mask, document_embedding,
-                          self.n_hidden_encoder, max_doc_len, self.keep_prob)
+            bidirectional_encoder_layer(GRU, self.n_layers, self.document_mask, document_embedding,
+                                        self.n_hidden_encoder, max_doc_len, self.keep_prob)
 
         current_batch_size = tf.to_int32(tf.shape(self.query)[0])
 
@@ -373,9 +374,9 @@ class Seq2Seq:
         # Logging example document, ground truth question and generated question
         detokenizer = MosesDetokenizer()
         doc = prediction_text[0][0][0]
-        doc = [word for word in doc if word != "Subsequently"]
+        doc = [word for word in doc if word != "@pad"]
         qry = prediction_text[0][1][0]
-        qry = [word for word in qry if word != "Subsequently"]
+        qry = [word for word in qry if word != "@pad"]
         gen_qry = prediction_text[0][2][0]
         doc = detokenizer.detokenize(doc, return_str=True)
         qry = detokenizer.detokenize(qry, return_str=True)

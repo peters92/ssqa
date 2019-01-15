@@ -61,7 +61,7 @@ def get_args():
                         help='size of final dense layer')
     parser.add_argument('--n_hidden_encoder', type=int, default=256,
                         help='size of seq2seq encoder layer')
-    parser.add_argument('--n_hidden_decoder', type=int, default=256,
+    parser.add_argument('--n_hidden_decoder', type=int, default=512,
                         help='size of seq2seq decoder layer')
     parser.add_argument('--answer_injection', type=bool, default=True,
                         help='Whether or not to inject answer information into document embedding')
@@ -69,9 +69,9 @@ def get_args():
                         help='number of layers of the model')
     parser.add_argument('--batch_size', type=int, default=32,
                         help='mini-batch size')
-    parser.add_argument('--n_epoch', type=int, default=10,
+    parser.add_argument('--n_epoch', type=int, default=100,
                         help='number of epochs')
-    parser.add_argument('--eval_every', type=int, default=500,
+    parser.add_argument('--eval_every', type=int, default=1384,
                         help='evaluation frequency')
     parser.add_argument('--print_every', type=int, default=50,
                         help='print frequency')
@@ -112,11 +112,11 @@ def train(args):
 
     # Building the iterable batch loaders (data in numpy arrays)
     train_batch_loader = MiniBatchLoader(
-        data.training, args.batch_size, sample=1.0)
+        data.training, args.batch_size, word_dict, sample=1.0)
     valid_batch_loader = MiniBatchLoader(
-        data.validation, args.batch_size, shuffle=False)
+        data.validation, args.batch_size, word_dict, shuffle=False)
     test_batch_loader = MiniBatchLoader(
-        data.test, args.batch_size, shuffle=False)
+        data.test, args.batch_size, word_dict, shuffle=False)
 
     # Fixing the max. document and query length
     # Currently the max. is the same across all batches

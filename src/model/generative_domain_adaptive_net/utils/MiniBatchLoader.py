@@ -1,11 +1,12 @@
 import numpy as np
 import random
+from utils.Helpers import SYMB_PAD
 
 MAX_WORD_LEN = 10
 
 
 class MiniBatchLoader:
-    def __init__(self, questions, batch_size,
+    def __init__(self, questions, batch_size, word_dict,
                  shuffle=True, sample=1.0, prediction_only=None):
         self.batch_size = batch_size
         if sample == 1.0:
@@ -13,6 +14,7 @@ class MiniBatchLoader:
         else:
             self.questions = random.sample(
                 questions, int(sample * len(questions)))
+        self.word_dictionary = word_dict
 
         self.max_query_length = max(list(map(lambda x: len(x[1]), self.questions)))
         # TEMP DEBUGGING TODO: Change this once, dense layer problem is fixed
@@ -194,6 +196,10 @@ class MiniBatchLoader:
             type_index += 1
 
         self.batch_index += 1
+
+        # Add @pad vocab value where numpy arrays are zero
+        document_array[document_array == 0] = self.word_dictionary[SYMB_PAD]
+        query_array[query_array == 0] = self.word_dictionary[SYMB_PAD]
 
         return document_array, document_character_array, query_array, query_character_array,\
             answer_array, document_mask_array, query_mask_array, answer_mask_array,\
