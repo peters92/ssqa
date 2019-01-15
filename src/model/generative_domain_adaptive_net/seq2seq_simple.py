@@ -71,7 +71,7 @@ def get_args():
                         help='mini-batch size')
     parser.add_argument('--n_epoch', type=int, default=100,
                         help='number of epochs')
-    parser.add_argument('--eval_every', type=int, default=1384,
+    parser.add_argument('--eval_every', type=int, default=2499,
                         help='evaluation frequency')
     parser.add_argument('--print_every', type=int, default=50,
                         help='print frequency')

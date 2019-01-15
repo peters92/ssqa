@@ -373,18 +373,20 @@ class Seq2Seq:
         logging.info(statement)
         # Logging example document, ground truth question and generated question
         detokenizer = MosesDetokenizer()
-        doc = prediction_text[0][0][0]
-        doc = [word for word in doc if word != "@pad"]
-        qry = prediction_text[0][1][0]
-        qry = [word for word in qry if word != "@pad"]
-        gen_qry = prediction_text[0][2][0]
-        doc = detokenizer.detokenize(doc, return_str=True)
-        qry = detokenizer.detokenize(qry, return_str=True)
-        gen_qry = detokenizer.detokenize(gen_qry, return_str=True)
 
-        logging.info("\n Document: {}\n".format(doc))
-        logging.info("\n Query: {}".format(qry))
-        logging.info("\n Generated query: {}".format(gen_qry))
+        for i in range(10):
+            doc = prediction_text[i][0][0]
+            doc = [word for word in doc if word != "@pad"]
+            qry = prediction_text[i][1][0]
+            qry = [word for word in qry if word != "@pad"]
+            gen_qry = prediction_text[i][2][0]
+            doc = detokenizer.detokenize(doc, return_str=True)
+            qry = detokenizer.detokenize(qry, return_str=True)
+            gen_qry = detokenizer.detokenize(gen_qry, return_str=True)
+
+            logging.info("\n Document: {}\n".format(doc))
+            logging.info("\n Query: {}".format(qry))
+            logging.info("\n Generated query: {}".format(gen_qry))
 
         return loss, em_accuracy, f1_score
 
