@@ -14,7 +14,7 @@ from tqdm import tqdm
 from utils.DataPreprocessor import DataPreprocessor
 from utils.MiniBatchLoader import MiniBatchLoader
 from utils.Helpers import check_dir, load_word2vec_embeddings
-from model.GAReader import GAReader
+from model.seq2seq_model import Seq2Seq
 
 
 def str2bool(v):
@@ -44,13 +44,13 @@ def get_args():
                         help='whether to perform initial test')
     parser.add_argument('--model_name', type=str, default="model_{}".format(datetime.now().isoformat()),
                         help='Name of the model, used in saving logs and checkpoints')
-    parser.add_argument('--data_dir', type=str, default='/scratch/s161027/ga_reader_data/squad',
+    parser.add_argument('--data_dir', type=str, default='/scratch/s161027/ga_reader_data/ssqa_processed',
                         help='data directory containing input')
     parser.add_argument('--log_dir', type=str,
-                        default='/scratch/s161027/run_data/SQUAD/temp_test_delete/log',
+                        default='/scratch/s161027/run_data/SSQA/TEST_RUNS_DELETE/log',
                         help='directory containing tensorboard logs')
     parser.add_argument('--save_dir', type=str,
-                        default='/scratch/s161027/run_data/SQUAD/temp_test_delete/saved_models',
+                        default='/scratch/s161027/run_data/SSQA/TEST_RUNS_DELETE/saved_models',
                         help='directory to store checkpointed models')
     parser.add_argument('--embed_file', type=str,
                         default='/scratch/s161027/ga_reader_data/word2vec_glove.txt',
@@ -59,14 +59,20 @@ def get_args():
                         help='size of word GRU hidden state')
     parser.add_argument('--n_hidden_dense', type=int, default=1024,
                         help='size of final dense layer')
-    parser.add_argument('--n_layers', type=int, default=3,
+    parser.add_argument('--n_hidden_encoder', type=int, default=256,
+                        help='size of seq2seq encoder layer')
+    parser.add_argument('--n_hidden_decoder', type=int, default=256,
+                        help='size of seq2seq decoder layer')
+    parser.add_argument('--answer_injection', type=bool, default=True,
+                        help='Whether or not to inject answer information into document embedding')
+    parser.add_argument('--n_layers', type=int, default=4,
                         help='number of layers of the model')
     parser.add_argument('--batch_size', type=int, default=32,
                         help='mini-batch size')
-    parser.add_argument('--n_epoch', type=int, default=100,
+    parser.add_argument('--n_epoch', type=int, default=10,
                         help='number of epochs')
-    parser.add_argument('--eval_every', type=int, default=2451,
-                        help='evaluation frequency')  # eval every 2451
+    parser.add_argument('--eval_every', type=int, default=500,
+                        help='evaluation frequency')
     parser.add_argument('--print_every', type=int, default=50,
                         help='print frequency')
     parser.add_argument('--grad_clip', type=float, default=10,
@@ -100,6 +106,10 @@ def train(args):
         use_chars=use_chars,
         only_test_run=args.test_only)
 
+    # Define the reverse word dictionary for inference
+    word_dict = data.dictionary[0]
+    inverse_word_dict = dict(zip(word_dict.values(), word_dict.keys()))
+
     # Building the iterable batch loaders (data in numpy arrays)
     train_batch_loader = MiniBatchLoader(
         data.training, args.batch_size, sample=1.0)
@@ -124,22 +134,20 @@ def train(args):
             load_word2vec_embeddings(data.dictionary[0], args.embed_file)
         logging.info("embedding dim: {}".format(embed_dim))
         logging.info("initialize model ...")
-        model = GAReader(args.n_layers, data.dictionary,
-                         data.vocab_size, data.num_chars,
-                         args.n_hidden, args.n_hidden_dense,
-                         embed_dim, args.train_emb,
-                         args.char_dim, args.use_feat,
-                         args.gating_fn, save_attn=True)
+        model = Seq2Seq(args.n_layers, data.dictionary, data.vocab_size, args.n_hidden_encoder,
+                        args.n_hidden_decoder, embed_dim, args.train_emb, args.answer_injection,
+                        args.batch_size)
         model.build_graph(args.grad_clip, embed_init, args.seed,
                           max_doc_len, max_qry_len)
-
+        print("\n\nModel build successful!\n\n")
         init = tf.global_variables_initializer()
         loc_init = tf.local_variables_initializer()
         saver = tf.train.Saver(tf.global_variables())
     else:
-        model = GAReader(args.n_layers, data.vocab_size, data.num_chars,
-                         args.n_hidden, args.n_hidden_dense, 100, args.train_emb, args.char_dim,
-                         args.use_feat, args.gating_fn)
+        pass
+        # model = GAReader(args.n_layers, data.vocab_size, data.num_chars,
+        #                  args.n_hidden, args.n_hidden_dense, 100, args.train_emb, args.char_dim,
+        #                  args.use_feat, args.gating_fn)
 
     # Setting GPU memory
     # gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=1)
@@ -210,17 +218,19 @@ def train(args):
                 sess.run(running_vars_initializer)
 
             for training_data in train_batch_loader:
-                loss_, f1_score_, exact_match_accuracy_, updates_ = \
+                # loss_, f1_score_, exact_match_accuracy_, updates_ = \
+                #     model.train(sess, training_data, args.drop_out, learning_rate, it, writer, epoch, max_it)
+                loss_, updates_ = \
                     model.train(sess, training_data, args.drop_out, learning_rate, it, writer, epoch, max_it)
 
                 # Cumulative loss, exact match and F1 accuracy
                 loss += loss_
-                em_acc += exact_match_accuracy_
-                f1_score += f1_score_
+                # em_acc += exact_match_accuracy_
+                # f1_score += f1_score_
 
                 # Saving loss, accuracy and iteration for later pickle dump
-                train_dict_dump["train_f1_score"].append(f1_score_)
-                train_dict_dump["train_em_acc"].append(exact_match_accuracy_)
+                # train_dict_dump["train_f1_score"].append(f1_score_)
+                # train_dict_dump["train_em_acc"].append(exact_match_accuracy_)
                 train_dict_dump["train_loss"].append(loss_)
                 train_dict_dump["train_iteration"].append(it)
                 train_dict_dump["epoch"].append(epoch)
@@ -264,10 +274,12 @@ def train(args):
 
                     logging.info("{:-^80}".format(" Validation "))
                     valid_loss, valid_acc, valid_f1_score = \
-                        model.validate(sess, valid_batch_loader, it, writer_val, epoch, max_it)
+                        model.validate(sess, valid_batch_loader,
+                                       inverse_word_dict, it,
+                                       writer_val, epoch, max_it)
 
-                    valid_dict_dump["valid_f1_score"].append(f1_score_)
-                    valid_dict_dump["valid_em_acc"].append(exact_match_accuracy_)
+                    # valid_dict_dump["valid_f1_score"].append(f1_score_)
+                    # valid_dict_dump["valid_em_acc"].append(exact_match_accuracy_)
                     valid_dict_dump["valid_loss"].append(loss_)
                     valid_dict_dump["train_iteration"].append(epoch*(it-1)+(it-1))
                     valid_dict_dump["epoch"].append(epoch)
@@ -282,7 +294,7 @@ def train(args):
                     start_time = time.time()
         # test model
         logging.info("Final test ...")
-        model.validate(sess, test_batch_loader)
+        model.validate(sess, test_batch_loader, inverse_word_dict)
 
         # Do pickle dump
         logging.info("Dumping run stats...")

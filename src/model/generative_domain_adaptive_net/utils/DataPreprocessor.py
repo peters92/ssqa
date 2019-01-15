@@ -3,13 +3,11 @@ from tqdm import tqdm, trange
 import glob
 import os
 import random
-
+from utils.Helpers import SYMB_BEGIN,\
+                          SYMB_END, \
+                          SYMB_PAD
 MAX_WORD_LEN = 10
 MWETokenizer = nltk.tokenize.MWETokenizer
-
-SYMB_PLACEHOLDER = "@placeholder"
-SYMB_BEGIN = "@begin"
-SYMB_END = "@end"
 
 
 class Data:
@@ -44,17 +42,17 @@ class DataPreprocessor:
         dictionary = (word_dictionary, char_dictionary)
 
         print("preparing training data ...")
-        training = self.parse_all_files(question_dir + "/training",
+        training = self.parse_all_files(question_dir + "/train-p0.5.json",
                                         dictionary, max_example,
                                         use_chars, only_test_run)
 
         print("preparing validation data ...")
-        validation = self.parse_all_files(question_dir + "/validation",
+        validation = self.parse_all_files(question_dir + "/dev-v1.1.json",
                                           dictionary, max_example,
                                           use_chars, only_test_run)
 
         print("preparing test data ...")
-        test = self.parse_all_files(question_dir + "/test",
+        test = self.parse_all_files(question_dir + "/test-p0.1.json",
                                     dictionary, max_example,
                                     use_chars, only_test_run)
 
@@ -74,9 +72,9 @@ class DataPreprocessor:
             print("No vocab file found on the following path:\n" + vocab_file)
 
             fnames = []
-            fnames += glob.glob(question_dir + "/test/*.question")
-            fnames += glob.glob(question_dir + "/validation/*.question")
-            fnames += glob.glob(question_dir + "/training/*.question")
+            fnames += glob.glob(question_dir + "/test-p0.1.json/*.question")
+            fnames += glob.glob(question_dir + "/dev-v1.1.json/*.question")
+            fnames += glob.glob(question_dir + "/train-p0.5.json/*.question")
             vocab_set = set()
 
             # Progress bar

@@ -3,18 +3,16 @@ from tqdm import tqdm, trange
 import glob
 import os
 import random
+from utils.Helpers import SYMB_PAD, SYMB_BEGIN,\
+                          SYMB_END, SYMB_PLACEHOLDER
 
 # TODO: Rewrite this script completely. DataPreprocessor needs to first read json, create the variables for storing
-# the paragraphs/questions/answers/answer indices etc. Then based on the variables in memory, create the dictionary if
-# it does not already exist on disk.
+# the paragraphs/questions/answers/answer indices etc. Then based on the variables
+# in memory, create the dictionary if it does not already exist on disk.
 
 MAX_WORD_LEN = 10
 MWETokenizer = nltk.tokenize.MWETokenizer
 
-SYMB_PLACEHOLDER = "@placeholder"
-SYMB_BEGIN = "@begin"
-SYMB_END = "@end"
-SYMB_PAD = "@pad"
 
 class Data:
 
@@ -141,13 +139,13 @@ class DataPreprocessor:
 
         return word_dictionary, char_dictionary, num_entities
 
-    def parse_one_file(self, fname, dictionary, use_chars):
+    def parse_one_file(self, filename, dictionary, use_chars):
         """
         parse a *.question file into tuple(document, query, answer, filename)
         """
         ###############################################################################################################
         w_dict, c_dict = dictionary[0], dictionary[1]
-        raw = open(fname).readlines()
+        raw = open(filename).readlines()
 
         # Using nltk to tokenize input
         document_raw = nltk.word_tokenize(raw[2])  # document
@@ -162,7 +160,7 @@ class DataPreprocessor:
             ans_start_token = raw[10].split()[0]
             ans_end_token = raw[10].split()[1]
         except IndexError:
-            self.removed_questions.append(fname)
+            self.removed_questions.append(filename)
             self.num_removed_questions += 1
             return (0,)
 

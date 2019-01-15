@@ -110,12 +110,15 @@ class MiniBatchLoader:
         # document word mask
         document_mask_array = np.zeros(
             (current_batch_size, current_max_document_length),
-            dtype='int8')
+            dtype='int32')
         # query word mask
         query_mask_array = np.zeros(
             (current_batch_size, self.max_query_length),
-            dtype='int8')
-
+            dtype='int32')
+        # Answer mask array
+        answer_mask_array = np.zeros(
+            (current_batch_size, self.max_document_length),
+            dtype='int32')
         # The answer contains start- and end-index
         answer_array = np.zeros((current_batch_size, 2), dtype='int32')
 
@@ -134,6 +137,7 @@ class MiniBatchLoader:
 
             document_mask_array[n, : len(current_document)] = 1
             query_mask_array[n, : len(current_query)] = 1
+            answer_mask_array[n, int(current_answer_start):int(current_answer_end)] = 1
 
             # Collecting unique document words (in characters)
             # marking which question they came from in the batch
@@ -192,5 +196,5 @@ class MiniBatchLoader:
         self.batch_index += 1
 
         return document_array, document_character_array, query_array, query_character_array,\
-            answer_array, document_mask_array, query_mask_array, type_character_array,\
-            type_character_mask, filenames
+            answer_array, document_mask_array, query_mask_array, answer_mask_array,\
+            type_character_array, type_character_mask, filenames

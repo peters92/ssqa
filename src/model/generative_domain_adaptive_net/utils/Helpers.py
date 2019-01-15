@@ -5,7 +5,10 @@ import string
 import re
 
 EMBED_DIM = 128
-
+SYMB_PLACEHOLDER = "@placeholder"
+SYMB_BEGIN = "@begin"
+SYMB_END = "@end"
+SYMB_PAD = "@pad"
 
 def normalize_answer(s):
     """Lower text and remove punctuation, articles and extra whitespace."""
@@ -242,10 +245,3 @@ def check_dir(*args, exit_function=False):
                 os.makedirs(dir_)
             else:
                 raise ValueError("{} does not exist!".format(dir_))
-
-
-# def prepare_input(document_array, query_array):
-#     f = np.zeros(document_array.shape[:2]).astype('int32')
-#     for i in range(document_array.shape[0]):
-#         f[i, :] = np.in1d(document_array[i, :, 0], query_array[i, :, 0])
-#     return f

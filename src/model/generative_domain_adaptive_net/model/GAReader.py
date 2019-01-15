@@ -266,7 +266,7 @@ class GAReader:
         # According to paper: "Dataset and Neural Recurrent Sequence Labeling Model for
         # Open-Domain Factoid Question Answering" by Li et al. 2016
         # arXiv:1607.06275v2
-        # This a very simple feature which marks for each wprd in the document if that same word
+        # This a very simple feature which marks for each word in the document if that same word
         # can also be found in the query. This one-hot representation is then embedded using
         # a shape [2, 2] lookup table that is randomly initialized. Later the embeddings get
         # concatenated with the final layer document embedding along the last axis (hidden dim).
@@ -299,7 +299,6 @@ class GAReader:
             "Expected feature embedding shape [None, {}, {}] but got {}".format(
             max_doc_len, 2, feature_embedding.shape)
 
-        # TODO: Incorporate into the rest
         if self.use_chars:
             char_embedding = tf.get_variable(
                 "char_embedding", [self.vocab_size_char, self.n_hidden_char],
