@@ -61,13 +61,17 @@ def get_args():
                         help='size of final dense layer')
     parser.add_argument('--n_hidden_encoder', type=int, default=256,
                         help='size of seq2seq encoder layer')
-    parser.add_argument('--n_hidden_decoder', type=int, default=512,
+    parser.add_argument('--n_hidden_decoder', type=int, default=256,
                         help='size of seq2seq decoder layer')
     parser.add_argument('--answer_injection', type=bool, default=True,
                         help='Whether or not to inject answer information into document embedding')
+    parser.add_argument('--bi_encoder', type=bool, default=True,
+                        help='Whether or not to use a bidirectional encoder')
+    parser.add_argument('--use_attention', type=bool, default=True,
+                        help='Whether or not to use attention over the encoder outputs')
     parser.add_argument('--n_layers', type=int, default=4,
                         help='number of layers of the model')
-    parser.add_argument('--batch_size', type=int, default=32,
+    parser.add_argument('--batch_size', type=int, default=128,
                         help='mini-batch size')
     parser.add_argument('--n_epoch', type=int, default=100,
                         help='number of epochs')
@@ -77,7 +81,8 @@ def get_args():
                         help='print frequency')
     parser.add_argument('--grad_clip', type=float, default=10,
                         help='clip gradients at this value')
-    parser.add_argument('--init_learning_rate', type=float, default=5e-4,
+    # TODO: remember original val -> 5e-4
+    parser.add_argument('--init_learning_rate', type=float, default=1e-4,
                         help='initial learning rate')
     parser.add_argument('--seed', type=int, default=0,
                         help='random seed for tensorflow')
@@ -87,7 +92,7 @@ def get_args():
                         help='size of character GRU hidden state')
     parser.add_argument('--gating_fn', type=str, default='tf.multiply',
                         help='gating function')
-    parser.add_argument('--drop_out', type=float, default=0.3,
+    parser.add_argument('--drop_out', type=float, default=0.5,
                         help='dropout rate')
     args = parser.parse_args()
     return args
@@ -136,7 +141,7 @@ def train(args):
         logging.info("initialize model ...")
         model = Seq2Seq(args.n_layers, data.dictionary, data.vocab_size, args.n_hidden_encoder,
                         args.n_hidden_decoder, embed_dim, args.train_emb, args.answer_injection,
-                        args.batch_size)
+                        args.batch_size, args.bi_encoder, args.use_attention)
         model.build_graph(args.grad_clip, embed_init, args.seed,
                           max_doc_len, max_qry_len)
         print("\n\nModel build successful!\n\n")

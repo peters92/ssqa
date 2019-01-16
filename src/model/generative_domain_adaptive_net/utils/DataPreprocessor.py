@@ -43,7 +43,7 @@ class DataPreprocessor:
         dictionary = (word_dictionary, char_dictionary)
 
         print("preparing training data ...")
-        training = self.parse_all_files(question_dir + "/train-p0.9.json",
+        training = self.parse_all_files(question_dir + "/train-p0.2.json",
                                         dictionary, max_example,
                                         use_chars, only_test_run)
 

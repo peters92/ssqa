@@ -23,7 +23,8 @@ MAX_WORD_LEN = 10
 
 class Seq2Seq:
     def __init__(self, n_layers, dictionaries, vocab_size, n_hidden_encoder,
-                 n_hidden_decoder, embed_dim, train_emb, answer_injection, batch_size):
+                 n_hidden_decoder, embed_dim, train_emb, answer_injection, batch_size, use_bi_encoder,
+                 use_attention):
         # Input variables
         self.n_hidden_encoder = n_hidden_encoder  # Number of hidden units in encoder
         self.n_hidden_decoder = n_hidden_decoder  # Number of hidden units in decoder
@@ -37,6 +38,13 @@ class Seq2Seq:
         self.symbol_begin = self.word_dictionary[SYMB_BEGIN]  # Integer of start of sequence mark
         self.symbol_end = self.word_dictionary[SYMB_END]  # Integer of start of sequence mark
         self.answer_injection = answer_injection
+        self.use_bi_encoder = use_bi_encoder
+        self.use_attention = use_attention
+
+        # If a bidirectional encoder is used, then make sure the decoder has twice the units
+        # to match the concatenated encoder state size (which is 2 * n_hidden_encoder)
+        if self.use_bi_encoder:
+            self.n_hidden_decoder *= 2
 
         # Graph initialization
         # See their explanation below in the build_graph() method
@@ -175,8 +183,7 @@ class Seq2Seq:
             "Expected document embedding shape [None, {}, {}] but got {}".format(
                 max_doc_len, self.embed_dim, query_embedding.shape)
 
-        # TODO: Add feature marking the answer tokens in the document
-        # Concatenating the Question-Evidence Common Word feature with the last layer's document embedding input
+        # Concatenating the answer mask with the last layer's document embedding input
         if self.answer_injection:
             answer_mask_expanded = tf.expand_dims(self.answer_mask, axis=2)
             document_embedding = tf.concat([document_embedding, answer_mask_expanded], axis=2)
@@ -191,9 +198,14 @@ class Seq2Seq:
         #               Encoder Layer
         # -----------------------------------------
 
-        encoder_output, encoder_states = \
-            bidirectional_encoder_layer(GRU, self.n_layers, self.document_mask, document_embedding,
-                                        self.n_hidden_encoder, max_doc_len, self.keep_prob)
+        if self.use_bi_encoder:
+            encoder_output, encoder_states = \
+                bidirectional_encoder_layer(GRU, self.n_layers, self.document_mask, document_embedding,
+                                            self.n_hidden_encoder, max_doc_len, self.keep_prob)
+        else:
+            encoder_output, encoder_states = \
+                encoder_layer(GRU, self.n_layers, self.document_mask, document_embedding,
+                              self.n_hidden_encoder, max_doc_len, self.keep_prob)
 
         current_batch_size = tf.to_int32(tf.shape(self.query)[0])
 
@@ -374,7 +386,7 @@ class Seq2Seq:
         # Logging example document, ground truth question and generated question
         detokenizer = MosesDetokenizer()
 
-        for i in range(10):
+        for i in range(len(prediction_text)):
             doc = prediction_text[i][0][0]
             doc = [word for word in doc if word != "@pad"]
             qry = prediction_text[i][1][0]
