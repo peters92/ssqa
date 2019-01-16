@@ -2,18 +2,15 @@
 Simple seq2seq architecture for testing.
 """
 import tensorflow as tf
-import numpy as np
 from tensorflow.contrib.rnn import GRUCell as GRU
 import time
 import os
 import logging
 from tqdm import trange
-from model.layers import encoder_layer,\
-                         bidirectional_encoder_layer, \
-                         decoder_layer,\
-                         crossentropy
-from utils.Helpers import calculate_accuracies,\
-                          SYMB_BEGIN,\
+from model.seq2seq_model_helpers import encoder_layer,\
+                                        bidirectional_encoder_layer, \
+                                        decoder_layer
+from utils.Helpers import SYMB_BEGIN,\
                           SYMB_END
 from nltk.tokenize.moses import MosesDetokenizer
 

@@ -15,10 +15,10 @@ import time
 import os
 import logging
 from tqdm import trange
-from model.layers import gated_attention,\
-                               pairwise_interaction,\
-                               attention_sum,\
-                               crossentropy
+from model.ga_reader_model_helpers import gated_attention,\
+                                          pairwise_interaction,\
+                                          attention_sum,\
+                                          crossentropy
 from utils.Helpers import calculate_accuracies
 
 # Maximum word length, used for limiting word lengths if using character model
