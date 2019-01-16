@@ -198,6 +198,7 @@ class Seq2Seq:
         #               Encoder Layer
         # -----------------------------------------
 
+        # Pass the document to the encoder layer (either bidirectional or unidirectional)
         if self.use_bi_encoder:
             encoder_output, encoder_states = \
                 bidirectional_encoder_layer(GRU, self.n_layers, self.document_mask, document_embedding,
@@ -209,11 +210,12 @@ class Seq2Seq:
 
         current_batch_size = tf.to_int32(tf.shape(self.query)[0])
 
-        logits_training, logits_inference = decoder_layer(encoder_states, query_embedding,
-                                                          self.query_mask, word_vectors, GRU,
+        logits_training, logits_inference = decoder_layer(encoder_states, encoder_output,
+                                                          query_embedding, self.query_mask,
+                                                          self.document_mask, word_vectors, GRU,
                                                           max_qry_len, self.vocab_size,
-                                                          self.n_layers,
-                                                          self.n_hidden_decoder, self.keep_prob,
+                                                          self.n_layers, self.n_hidden_decoder,
+                                                          self.keep_prob, self.use_attention,
                                                           self.symbol_begin, self.symbol_end,
                                                           current_batch_size)
 

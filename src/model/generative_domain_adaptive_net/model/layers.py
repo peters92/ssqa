@@ -5,6 +5,7 @@ from __future__ import division
 from __future__ import print_function
 
 import tensorflow as tf
+
 # =======================================================================
 # All references to paper unless below -unless otherwise stated- refer to:
 # "Gated-Attention Readers for Text Comprehension" by Dhingra et al. 2016
@@ -13,6 +14,7 @@ import tensorflow as tf
 # =======================================================================
 
 
+# ============================GATED ATTENTION READER======================================
 def gated_attention(document_embedding, query_embedding, interaction,
                     query_mask, document_mask, gating_fn=tf.multiply):
     # document shape:           [batch_size, max_document_length, embedding_dimensions]
@@ -123,62 +125,12 @@ def crossentropy(prediction, target):
 
     # Return the negative logarithm of the probability
     return - tf.log(prob)
+# =============================END OF GATED ATTENTION READER===============================
 
 
-# def encoder_layer_old(rnn_cell, n_layers, document_mask, document_embedding,
-#                   n_hidden_encoder, max_doc_len, keep_probability):
-#     """
-#     Encoder layer for simple seq2seq model. Encodes the received document and returns the hidden states.
-#     :return: encoded document embedding hidden states as tuple of shape=(n_layers,)
-#     """
-#     encoder_states = []
-#     # Generate the n_layers of the encoder. States are not overwritten but saved individually in a tuple
-#     # to be passed on to the decoder. (Where dynamic decode requires the states as a tuple!)
-#     for i in range(n_layers):
-#         # --------------------
-#         #  BI-DIRECTIONAL GRU
-#         # --------------------
-#         # Define the GRU cells used for the forward and backward document sequence
-#         # Also apply dropout individually
-#         forward_document_cell = rnn_cell(n_hidden_encoder)
-#         forward_document_cell = tf.contrib.rnn.DropoutWrapper(forward_document_cell,
-#                                                          input_keep_prob=keep_probability)
-#         backward_document_cell = rnn_cell(n_hidden_encoder)
-#         backward_document_cell = tf.contrib.rnn.DropoutWrapper(backward_document_cell,
-#                                                           input_keep_prob=keep_probability)
-#         # Get the actual length of documents in the current batch
-#         sequence_length = tf.reduce_sum(document_mask, axis=1)
-#
-#         # Pass the document through the Bi-GRU (see figure 1 in paper, x_1 to x_T on horizontal arrows)
-#         (forward_document_output, backward_document_output),\
-#             (forward_document_state, backward_document_state) = \
-#             tf.nn.bidirectional_dynamic_rnn(
-#                 forward_document_cell, backward_document_cell, document_embedding, sequence_length=sequence_length,
-#                 dtype=tf.float32, scope="layer_{}_doc_rnn".format(i))
-#         # Concatenate the output from the Bi-GRU, see eq. 1 and 2 in paper
-#         document_bi_embedding = tf.concat([forward_document_output, backward_document_output],
-#                                           axis=2, name="encoder_output_{}".format(i))
-#         document_bi_states = tf.concat([forward_document_state, backward_document_state],
-#                                        axis=1, name="encoder_state_{}".format(i))
-#
-#         # Assert shape of document_bi_embedding
-#         assert document_bi_embedding.shape.as_list() == [None, max_doc_len, 2 * n_hidden_encoder], \
-#             "Expected document_bi_embedding shape [None, {}, {}] but got {}".format(
-#                 max_doc_len, 2 * n_hidden_encoder, document_bi_embedding.shape)
-#         # Assert shape of document_bi_states
-#         assert document_bi_states.shape.as_list() == [None, 2 * n_hidden_encoder], \
-#             "Expected document_bi_embedding shape [None, {}] but got {}".format(2 * n_hidden_encoder,
-#                                                                                 document_bi_states.shape)
-#
-#         encoder_states.append(document_bi_states)
-#         document_embedding = document_bi_embedding
-#
-#     encoder_output = document_bi_embedding
-#
-#     return encoder_output, tuple(encoder_states)
-
-
-# Alternate encoder layer, only forward reading
+# Bidirectional encoder. Concatenates the output/states from a forward and a backward
+# GRU cell. The encoder states are collected from each layer and are used as input to the
+# decoder.
 def bidirectional_encoder_layer(rnn_cell, n_layers, document_mask, document_embedding,
                                 n_hidden_encoder, max_doc_len, keep_probability):
 
@@ -206,13 +158,15 @@ def bidirectional_encoder_layer(rnn_cell, n_layers, document_mask, document_embe
             encoder_states = tf.concat([encoder_states[0], encoder_states[1]], axis=1)
             encoder_states_list.append(encoder_states)
 
-    encoder_output = tf.concat(encoder_output, 2)
+            encoder_output = tf.concat(encoder_output, 2)
+            document_embedding = encoder_output
+
     encoder_states = tuple(encoder_states_list)
 
     return encoder_output, encoder_states
 
 
-# Alternate encoder layer, only forward reading
+# Simple encoder, only forward reading of document with a GRU cell
 def encoder_layer(rnn_cell, n_layers, document_mask, document_embedding,
                   n_hidden_encoder, max_doc_len, keep_probability):
 
@@ -282,9 +236,9 @@ def decoder_layer_inference(decoder_input, decoder_cells, word_vectors,
     return logits
 
 
-def decoder_layer(document_embedding, query_embedding, query_mask, word_vectors, rnn_cell,
-                  max_query_length, vocab_size, n_layers, n_hidden_decoder,
-                  keep_probability, symbol_begin_embedded, symbol_end_embedded,
+def decoder_layer(encoder_states, encoder_output, query_embedding, query_mask, document_mask,
+                  word_vectors, rnn_cell, max_query_length, vocab_size, n_layers, n_hidden_decoder,
+                  keep_probability, use_attention, symbol_begin_embedded, symbol_end_embedded,
                   current_batch_size):
     """
     The full decoder layer. Decodes the input (encoder hidden states of embedded document) and returns
@@ -300,14 +254,29 @@ def decoder_layer(document_embedding, query_embedding, query_mask, word_vectors,
     # Defining output layer (dense) for calculating logits over the vocabulary
     output_layer = tf.layers.Dense(vocab_size)
 
+    # If true, then use the attention mechanism over the encoder outputs.
+    if use_attention:
+        sequence_length = tf.reduce_sum(document_mask, axis=1)
+        attention = tf.contrib.seq2seq.BahdanauAttention(n_hidden_decoder,
+                                                         encoder_output,
+                                                         sequence_length,
+                                                         name="BahdanauAttentionMechanism")
+        decoder_cells = tf.contrib.seq2seq.AttentionWrapper(decoder_cells,
+                                                            attention,
+                                                            n_hidden_decoder)
+        # Initialize zero state
+        zero_state = decoder_cells.zero_state(current_batch_size, tf.float32)
+        # Copy contents of encoder states into the zero state
+        encoder_states = zero_state.clone(cell_state=encoder_states)
+
     with tf.variable_scope("decode"):
-        logits_training = decoder_layer_training(document_embedding, decoder_cells,
+        logits_training = decoder_layer_training(encoder_states, decoder_cells,
                                                  query_embedding, query_mask,
                                                  max_query_length, output_layer,
                                                  keep_probability)
 
     with tf.variable_scope("decode", reuse=True):
-        logits_inference = decoder_layer_inference(document_embedding, decoder_cells,
+        logits_inference = decoder_layer_inference(encoder_states, decoder_cells,
                                                    word_vectors, symbol_begin_embedded,
                                                    symbol_end_embedded, max_query_length,
                                                    output_layer, keep_probability,

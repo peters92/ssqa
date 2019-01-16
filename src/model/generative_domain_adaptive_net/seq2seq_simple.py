@@ -27,6 +27,7 @@ def str2bool(v):
 
 
 def get_args():
+    # TODO: Separate arguments based on where they apply (Disc. model or Generative, hyperparams etc.)
     parser = argparse.ArgumentParser(
         description='Gated Attention Reader for \
         Text Comprehension Using TensorFlow')
@@ -67,11 +68,11 @@ def get_args():
                         help='Whether or not to inject answer information into document embedding')
     parser.add_argument('--bi_encoder', type=bool, default=True,
                         help='Whether or not to use a bidirectional encoder')
-    parser.add_argument('--use_attention', type=bool, default=True,
+    parser.add_argument('--use_attention', type=bool, default=False,
                         help='Whether or not to use attention over the encoder outputs')
     parser.add_argument('--n_layers', type=int, default=4,
                         help='number of layers of the model')
-    parser.add_argument('--batch_size', type=int, default=128,
+    parser.add_argument('--batch_size', type=int, default=16,
                         help='mini-batch size')
     parser.add_argument('--n_epoch', type=int, default=100,
                         help='number of epochs')
