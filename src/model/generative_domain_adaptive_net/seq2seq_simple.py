@@ -11,6 +11,10 @@ import time
 from datetime import datetime
 from tqdm import tqdm
 
+# DEBUG
+import resource
+import gc
+
 from utils.DataPreprocessor import DataPreprocessor
 from utils.MiniBatchLoader import MiniBatchLoader
 from utils.Helpers import check_dir, load_word2vec_embeddings
@@ -60,30 +64,37 @@ def get_args():
                         help='size of word GRU hidden state')
     parser.add_argument('--n_hidden_dense', type=int, default=1024,
                         help='size of final dense layer')
-    parser.add_argument('--n_hidden_encoder', type=int, default=256,
+    # =================== SEQ2SEQ =======================================================
+    parser.add_argument('--vocab_size', type=int, default=10000,
+                        help='Size of desired vocabulary. This will limit the vocab to the N most\''
+                        'frequent words out of all words found in the data. The rest are "@unk".')
+    parser.add_argument('--n_hidden_encoder', type=int, default=128,
                         help='size of seq2seq encoder layer')
-    parser.add_argument('--n_hidden_decoder', type=int, default=256,
+    parser.add_argument('--n_hidden_decoder', type=int, default=128,
                         help='size of seq2seq decoder layer')
     parser.add_argument('--answer_injection', type=bool, default=True,
                         help='Whether or not to inject answer information into document embedding')
     parser.add_argument('--bi_encoder', type=bool, default=True,
                         help='Whether or not to use a bidirectional encoder')
-    parser.add_argument('--use_attention', type=bool, default=False,
+    parser.add_argument('--use_attention', type=bool, default=True,
                         help='Whether or not to use attention over the encoder outputs')
-    parser.add_argument('--n_layers', type=int, default=4,
+    parser.add_argument('--use_copy_mechanism', type=bool, default=True,
+                        help='Whether or not to use the copy mechanism')
+    parser.add_argument('--n_layers', type=int, default=2,
                         help='number of layers of the model')
-    parser.add_argument('--batch_size', type=int, default=16,
+    # =================== SEQ2SEQ =======================================================
+    parser.add_argument('--batch_size', type=int, default=8,
                         help='mini-batch size')
-    parser.add_argument('--n_epoch', type=int, default=100,
+    parser.add_argument('--n_epoch', type=int, default=10,
                         help='number of epochs')
-    parser.add_argument('--eval_every', type=int, default=2499,
+    parser.add_argument('--eval_every', type=int, default=2,
                         help='evaluation frequency')
     parser.add_argument('--print_every', type=int, default=50,
                         help='print frequency')
     parser.add_argument('--grad_clip', type=float, default=10,
                         help='clip gradients at this value')
     # TODO: remember original val -> 5e-4
-    parser.add_argument('--init_learning_rate', type=float, default=1e-4,
+    parser.add_argument('--init_learning_rate', type=float, default=5e-4,
                         help='initial learning rate')
     parser.add_argument('--seed', type=int, default=0,
                         help='random seed for tensorflow')
@@ -102,12 +113,15 @@ def get_args():
 def train(args):
     use_chars = args.char_dim > 0
     # Initialize session early to reserve GPU memory
+    # config = tf.ConfigProto()
+    # config.gpu_options.allow_growth = True
     sess = tf.Session()
 
     # Processing .question files and loading into memory (data in lists and tuples)
     dp = DataPreprocessor()
     data = dp.preprocess(
         question_dir=args.data_dir,
+        vocab_size=args.vocab_size,
         max_example=args.max_example,
         use_chars=use_chars,
         only_test_run=args.test_only)
@@ -142,7 +156,7 @@ def train(args):
         logging.info("initialize model ...")
         model = Seq2Seq(args.n_layers, data.dictionary, data.vocab_size, args.n_hidden_encoder,
                         args.n_hidden_decoder, embed_dim, args.train_emb, args.answer_injection,
-                        args.batch_size, args.bi_encoder, args.use_attention)
+                        args.batch_size, args.bi_encoder, args.use_attention, args.use_copy_mechanism)
         model.build_graph(args.grad_clip, embed_init, args.seed,
                           max_doc_len, max_qry_len)
         print("\n\nModel build successful!\n\n")
@@ -159,6 +173,9 @@ def train(args):
     # gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=1)
 
     with sess:
+        # DEBUG
+        sess.graph.finalize()
+
         # Tensorboard. Two writers to have training and validation accuracy both on the same
         # board.
         writer = tf.summary.FileWriter(args.log_dir+"/tensorboard/training",
@@ -214,20 +231,13 @@ def train(args):
             if epoch >= 2:
                 # Halve learning rate
                 learning_rate /= 2
-                # Reinitialize streaming accuracy metric for each epoch
-                # in order to measure accuracy only within one epoch
-                # and not across multiple epochs
-                running_vars = tf.get_collection(tf.GraphKeys.LOCAL_VARIABLES,
-                                                 scope="em_accuracy_metric")
-
-                running_vars_initializer = tf.variables_initializer(var_list=running_vars)
-                sess.run(running_vars_initializer)
 
             for training_data in train_batch_loader:
                 # loss_, f1_score_, exact_match_accuracy_, updates_ = \
                 #     model.train(sess, training_data, args.drop_out, learning_rate, it, writer, epoch, max_it)
                 loss_, updates_ = \
-                    model.train(sess, training_data, args.drop_out, learning_rate, it, writer, epoch, max_it)
+                    model.train(sess, training_data, args.drop_out, learning_rate, it, writer,
+                                epoch, max_it)
 
                 # Cumulative loss, exact match and F1 accuracy
                 loss += loss_
@@ -238,7 +248,7 @@ def train(args):
                 # train_dict_dump["train_f1_score"].append(f1_score_)
                 # train_dict_dump["train_em_acc"].append(exact_match_accuracy_)
                 train_dict_dump["train_loss"].append(loss_)
-                train_dict_dump["train_iteration"].append(it)
+                train_dict_dump["train_iteration"].append(epoch*(it-1)+(it-1))
                 train_dict_dump["epoch"].append(epoch)
 
                 it += 1
@@ -270,13 +280,6 @@ def train(args):
                 # Validate, and save model
                 if it % args.eval_every == 0 or \
                         it % max_it == 0:
-                    # Reinitialize streaming accuracy metric for each validation
-                    running_vars = tf.get_collection(
-                        tf.GraphKeys.LOCAL_VARIABLES,
-                        scope="em_valid_accuracy_metric")
-
-                    running_vars_initializer = tf.variables_initializer(var_list=running_vars)
-                    sess.run(running_vars_initializer)
 
                     logging.info("{:-^80}".format(" Validation "))
                     valid_loss, valid_acc, valid_f1_score = \
@@ -298,6 +301,12 @@ def train(args):
                         # TODO: model saving turned off temporarily
                         # model.save(sess, saver, args.save_dir, epoch)
                     start_time = time.time()
+
+                # # DEBUG
+                # if it % 50 == 0:
+                #     print('Iteration ', it, ' maxrss: ',
+                #           resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+                # gc.collect()
         # test model
         logging.info("Final test ...")
         model.validate(sess, test_batch_loader, inverse_word_dict)

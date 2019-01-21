@@ -5,10 +5,13 @@ import string
 import re
 
 EMBED_DIM = 128
+MAX_WORD_LEN = 10
+GEN_VOCAB_SIZE = 100
 SYMB_PLACEHOLDER = "@placeholder"
 SYMB_BEGIN = "@begin"
 SYMB_END = "@end"
 SYMB_PAD = "@pad"
+SYMB_UNK = "@unk"
 
 def normalize_answer(s):
     """Lower text and remove punctuation, articles and extra whitespace."""

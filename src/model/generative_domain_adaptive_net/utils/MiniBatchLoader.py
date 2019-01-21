@@ -18,14 +18,14 @@ class MiniBatchLoader:
 
         self.max_query_length = max(list(map(lambda x: len(x[1]), self.questions)))
         # TEMP DEBUGGING TODO: Change this once, dense layer problem is fixed
-        self.max_document_length = 1024
-        self.max_query_length = 62
+        # self.max_document_length = 1024
+        # self.max_query_length = 62
         # TEMP DEBUGGING
 
         # Normal behaviour, build bins according to the defined method
         # Otherwise if we are predicting only, use only one bin
         if prediction_only is None:
-            self.bins = self.build_bins(self.questions)
+            self.bins, self.max_document_length = self.build_bins(self.questions)
         else:  # Return a dict with the max document length and all question indices
             indices = [index for index, value in enumerate(self.questions)]
             self.bins = {self.max_document_length: indices}
@@ -61,7 +61,7 @@ class MiniBatchLoader:
                 bins[l] = []
             bins[l].append(i)
 
-        return bins  # ,max_document_length
+        return bins, max_document_length
 
     def reset(self):
         """new iteration"""
@@ -99,7 +99,8 @@ class MiniBatchLoader:
         question_indices = self.batch_pool[self.batch_index][0]
         current_batch_size = len(question_indices)
 
-        current_max_document_length = self.max_document_length
+        # current_max_document_length = self.max_document_length
+        current_max_document_length = self.batch_pool[self.batch_index][1]
 
         # document words
         document_array = np.zeros(
@@ -119,7 +120,7 @@ class MiniBatchLoader:
             dtype='int32')
         # Answer mask array
         answer_mask_array = np.zeros(
-            (current_batch_size, self.max_document_length),
+            (current_batch_size, current_max_document_length),
             dtype='int32')
         # The answer contains start- and end-index
         answer_array = np.zeros((current_batch_size, 2), dtype='int32')

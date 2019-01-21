@@ -11,17 +11,17 @@ from model.seq2seq_model_helpers import encoder_layer,\
                                         bidirectional_encoder_layer, \
                                         decoder_layer
 from utils.Helpers import SYMB_BEGIN,\
-                          SYMB_END
+                          SYMB_END,\
+                          GEN_VOCAB_SIZE,\
+                          MAX_WORD_LEN
 from nltk.tokenize.moses import MosesDetokenizer
 
-# Maximum word length, used for limiting word lengths if using character model
-MAX_WORD_LEN = 10
 
 
 class Seq2Seq:
     def __init__(self, n_layers, dictionaries, vocab_size, n_hidden_encoder,
                  n_hidden_decoder, embed_dim, train_emb, answer_injection, batch_size, use_bi_encoder,
-                 use_attention):
+                 use_attention, use_copy_mechanism):
         # Input variables
         self.n_hidden_encoder = n_hidden_encoder  # Number of hidden units in encoder
         self.n_hidden_decoder = n_hidden_decoder  # Number of hidden units in decoder
@@ -32,11 +32,13 @@ class Seq2Seq:
 
         self.word_dictionary = dictionaries[0]  # The word dictionary, used in accuracy
         self.vocab_size = vocab_size            # Size of the word vocabulary (unique word tokens)
+        self.gen_vocab_size = GEN_VOCAB_SIZE    # TODO: explain this
         self.symbol_begin = self.word_dictionary[SYMB_BEGIN]  # Integer of start of sequence mark
         self.symbol_end = self.word_dictionary[SYMB_END]  # Integer of start of sequence mark
         self.answer_injection = answer_injection
         self.use_bi_encoder = use_bi_encoder
         self.use_attention = use_attention
+        self.use_copy_mechanism = use_copy_mechanism
 
         # If a bidirectional encoder is used, then make sure the decoder has twice the units
         # to match the concatenated encoder state size (which is 2 * n_hidden_encoder)
@@ -81,8 +83,8 @@ class Seq2Seq:
         # Placeholder for integer representations of the document and query tokens.
         # These are tensors of shape [batch_size, max_length] where max_length is the length of the longest
         # document or query in the current batch.
-        self.document = tf.placeholder(tf.int32, [None, max_doc_len], name="document")  # Document words
-        self.query = tf.placeholder(tf.int32, [None, max_qry_len], name="query")  # Query words
+        self.document = tf.placeholder(tf.int32, [None, None], name="document")  # Document words
+        self.query = tf.placeholder(tf.int32, [None, None], name="query")  # Query words
         # Placeholder for the ground truth answer's index in the document.
         # A tensor of shape [batch_size, 2]
         # The values refer to the answer's index in the document. Can be either the index among
@@ -109,11 +111,11 @@ class Seq2Seq:
         # The masks are used to calculate the sequence length of each text sample going into
         # the bi-directional RNN.
         self.document_mask = tf.placeholder(
-            tf.int32, [None, max_doc_len], name="document_mask")
+            tf.int32, [None, None], name="document_mask")
         self.query_mask = tf.placeholder(
-            tf.int32, [None, max_qry_len], name="query_mask")
+            tf.int32, [None, None], name="query_mask")
         self.answer_mask = tf.placeholder(
-            tf.float32, [None, max_doc_len], name="answer_mask")
+            tf.float32, [None, None], name="answer_mask")
 
         # Model parameters
         # Initial learning rate
@@ -172,24 +174,24 @@ class Seq2Seq:
         query_embedding = tf.nn.embedding_lookup(
             word_vectors, self.query, name="query_embedding")
 
-        # Assert embedding shapes are [None, max_length, embedding_dimensions]
-        assert document_embedding.shape.as_list() == [None, max_doc_len, self.embed_dim],\
-            "Expected document embedding shape [None, {}, {}] but got {}".format(
-                max_doc_len, self.embed_dim, document_embedding.shape)
-        assert query_embedding.shape.as_list() == [None, max_qry_len, self.embed_dim],\
-            "Expected document embedding shape [None, {}, {}] but got {}".format(
-                max_doc_len, self.embed_dim, query_embedding.shape)
+        # # Assert embedding shapes are [None, max_length, embedding_dimensions]
+        # assert document_embedding.shape.as_list() == [None, max_doc_len, self.embed_dim],\
+        #     "Expected document embedding shape [None, {}, {}] but got {}".format(
+        #         max_doc_len, self.embed_dim, document_embedding.shape)
+        # assert query_embedding.shape.as_list() == [None, max_qry_len, self.embed_dim],\
+        #     "Expected document embedding shape [None, {}, {}] but got {}".format(
+        #         max_doc_len, self.embed_dim, query_embedding.shape)
 
-        # Concatenating the answer mask with the last layer's document embedding input
+        # Concatenating the answer mask with the document embedding
         if self.answer_injection:
             answer_mask_expanded = tf.expand_dims(self.answer_mask, axis=2)
             document_embedding = tf.concat([document_embedding, answer_mask_expanded], axis=2)
 
         # Assert document embedding (after answer_mask concatenation) shapes are:
-        # [None, max_length, embedding_dimensions]
-        assert document_embedding.shape.as_list() == [None, max_doc_len, self.embed_dim+1], \
-            "Expected document embedding shape [None, {}, {}] but got {}".format(
-                max_doc_len, self.embed_dim+1, document_embedding.shape)
+        # # [None, max_length, embedding_dimensions]
+        # assert document_embedding.shape.as_list() == [None, max_doc_len, self.embed_dim+1], \
+        #     "Expected document embedding shape [None, {}, {}] but got {}".format(
+        #         max_doc_len, self.embed_dim+1, document_embedding.shape)
 
         # -----------------------------------------
         #               Encoder Layer
@@ -200,7 +202,7 @@ class Seq2Seq:
             encoder_output, encoder_states = \
                 bidirectional_encoder_layer(GRU, self.n_layers, self.document_mask, document_embedding,
                                             self.n_hidden_encoder, max_doc_len, self.keep_prob)
-        else:
+        else:  # Use unidirectional encoder
             encoder_output, encoder_states = \
                 encoder_layer(GRU, self.n_layers, self.document_mask, document_embedding,
                               self.n_hidden_encoder, max_doc_len, self.keep_prob)
@@ -209,14 +211,19 @@ class Seq2Seq:
 
         logits_training, logits_inference = decoder_layer(encoder_states, encoder_output,
                                                           query_embedding, self.query_mask,
+                                                          self.document,
                                                           self.document_mask, word_vectors, GRU,
                                                           max_qry_len, self.vocab_size,
+                                                          self.gen_vocab_size,
                                                           self.n_layers, self.n_hidden_decoder,
                                                           self.keep_prob, self.use_attention,
-                                                          self.symbol_begin, self.symbol_end,
-                                                          current_batch_size)
+                                                          self.use_copy_mechanism, self.symbol_begin,
+                                                          self.symbol_end, current_batch_size)
 
         # Getting the output from the decoder layer
+        # RNN output is the full logit vector for each timestep
+        # sample_id is the argmax of the logit for each timestep, that is, an index which can be passed
+        # through an inverse word dictionary to see the predicted/generated words.
         logits_training = tf.identity(logits_training.rnn_output, name="logits")
         sample_ids_inference = tf.identity(logits_inference.sample_id, name="predictions")
         self.prediction = sample_ids_inference
@@ -235,9 +242,10 @@ class Seq2Seq:
         query_mask_sliced = tf.slice(query_mask_float, [0, 0], [current_batch_size, logits_shape_1])
         query_sliced = tf.slice(self.query, [0, 0], [current_batch_size, logits_shape_1])
 
-        self.loss = tf.contrib.seq2seq.sequence_loss(logits_training,
-                                                     query_sliced,
-                                                     query_mask_sliced)
+        with tf.name_scope("seq2seq_loss"):
+            self.loss = tf.contrib.seq2seq.sequence_loss(logits_training,
+                                                         query_sliced,
+                                                         query_mask_sliced)
 
         # -------------------
         #      ACCURACY
@@ -259,7 +267,7 @@ class Seq2Seq:
         # Tensorboard summaries
         # TODO: keep this for now, will check later if it can stay for seq2seq
         # self.em_acc_summ = tf.summary.scalar('exact_match_accuracy', self.em_acc_metric_update)
-        # self.loss_summ = tf.summary.scalar('cross-entropy_loss', self.loss)
+        self.loss_summ = tf.summary.scalar('seq2seq_loss', self.loss)
         # self.merged_summary = tf.summary.merge_all()
         # self.em_valid_acc_summ = tf.summary.scalar('em_valid_acc_metric',
         #                                            self.em_valid_acc_metric_update)
@@ -300,9 +308,14 @@ class Seq2Seq:
 
             # writer.add_summary(merged_summ, (epoch * max_it + iteration))
         else:  # Otherwise, get regular updates
-            loss, updates = \
-                sess.run([self.loss, self.updates], feed_dict)
-
+            # run_options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
+            # run_metadata = tf.RunMetadata()
+            loss, updates, summaries = \
+                sess.run([self.loss, self.updates, self.loss_summ], feed_dict)
+                         # options=run_options,
+                         # run_metadata=run_metadata)
+            # writer.add_run_metadata(run_metadata, "step{}".format(epoch*max_it+iteration))
+            writer.add_summary(summaries, int(epoch*max_it+iteration))
         # Calculate F1 Score and Exact Match accuracy over the batch
         # f1_score, exact_match_accuracy = calculate_accuracies(answer_array, predicted_answer_array,
         #                                                       document_array, self.word_dictionary)
@@ -385,7 +398,7 @@ class Seq2Seq:
         # Logging example document, ground truth question and generated question
         detokenizer = MosesDetokenizer()
 
-        for i in range(len(prediction_text)):
+        for i in range(int(len(prediction_text)/10)):
             doc = prediction_text[i][0][0]
             doc = [word for word in doc if word != "@pad"]
             qry = prediction_text[i][1][0]
