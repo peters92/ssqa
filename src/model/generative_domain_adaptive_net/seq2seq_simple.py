@@ -11,10 +11,6 @@ import time
 from datetime import datetime
 from tqdm import tqdm
 
-# DEBUG
-import resource
-import gc
-
 from utils.DataPreprocessor import DataPreprocessor
 from utils.MiniBatchLoader import MiniBatchLoader
 from utils.Helpers import check_dir, load_word2vec_embeddings
@@ -31,7 +27,6 @@ def str2bool(v):
 
 
 def get_args():
-    # TODO: Separate arguments based on where they apply (Disc. model or Generative, hyperparams etc.)
     parser = argparse.ArgumentParser(
         description='Gated Attention Reader for \
         Text Comprehension Using TensorFlow')
@@ -51,6 +46,9 @@ def get_args():
                         help='Name of the model, used in saving logs and checkpoints')
     parser.add_argument('--data_dir', type=str, default='/scratch/s161027/ga_reader_data/ssqa_processed',
                         help='data directory containing input')
+    parser.add_argument('--training_set', type=str,
+                        default='0.1',
+                        help='Which training set to use: 0.1, 0.2, 0.5 or 0.9 (complete set)')
     parser.add_argument('--log_dir', type=str,
                         default='/scratch/s161027/run_data/SSQA/TEST_RUNS_DELETE/log',
                         help='directory containing tensorboard logs')
@@ -121,6 +119,7 @@ def train(args):
     dp = DataPreprocessor()
     data = dp.preprocess(
         question_dir=args.data_dir,
+        training_set=args.training_set,
         vocab_size=args.vocab_size,
         max_example=args.max_example,
         use_chars=use_chars,
@@ -156,7 +155,8 @@ def train(args):
         logging.info("initialize model ...")
         model = Seq2Seq(args.n_layers, data.dictionary, data.vocab_size, args.n_hidden_encoder,
                         args.n_hidden_decoder, embed_dim, args.train_emb, args.answer_injection,
-                        args.batch_size, args.bi_encoder, args.use_attention, args.use_copy_mechanism)
+                        args.batch_size, args.bi_encoder, args.use_attention,
+                        args.use_copy_mechanism)
         model.build_graph(args.grad_clip, embed_init, args.seed,
                           max_doc_len, max_qry_len)
         print("\n\nModel build successful!\n\n")
@@ -233,8 +233,6 @@ def train(args):
                 learning_rate /= 2
 
             for training_data in train_batch_loader:
-                # loss_, f1_score_, exact_match_accuracy_, updates_ = \
-                #     model.train(sess, training_data, args.drop_out, learning_rate, it, writer, epoch, max_it)
                 loss_, updates_ = \
                     model.train(sess, training_data, args.drop_out, learning_rate, it, writer,
                                 epoch, max_it)
@@ -318,8 +316,11 @@ def train(args):
         outfile = open(dump_name, "wb")
         pickle.dump([train_dict_dump, valid_dict_dump], outfile)
         outfile.close()
-        # TODO: Send e-mail warning about script ending, then pause for a while
+
+        # TODO: Send e-mail with run information. Loss, epoch, validation inference example etc.
+
         input("Script ready to finish, please press enter to exit...")
+
 
 if __name__ == "__main__":
     args = get_args()
