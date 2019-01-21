@@ -91,7 +91,6 @@ def get_args():
                         help='print frequency')
     parser.add_argument('--grad_clip', type=float, default=10,
                         help='clip gradients at this value')
-    # TODO: remember original val -> 5e-4
     parser.add_argument('--init_learning_rate', type=float, default=5e-4,
                         help='initial learning rate')
     parser.add_argument('--seed', type=int, default=0,
