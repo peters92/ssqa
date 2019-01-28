@@ -5,7 +5,7 @@ from __future__ import division
 from __future__ import print_function
 
 import tensorflow as tf
-from model.CopyNet import CopyNetWrapper, CopyNetWrapperState
+from model.CopyNet import CopyNetWrapper
 
 
 # Bidirectional encoder. Concatenates the output/states from a forward and a backward
@@ -67,15 +67,12 @@ def encoder_layer(rnn_cell, n_layers, document_mask, document_embedding,
 
 
 def decoder_layer_training(decoder_input, decoder_cells, query_embedding, query_mask,
-                           max_query_length, output_layer, keep_probability):
+                           max_query_length, output_layer, keep_probability, max_parallel_dec):
     """
     Decoder layer for training mode. Decodes hidden states received from an encoder layer.
     :return: logits of shape [batch_size, max_query_length, vocabulary_size]
     """
     with tf.name_scope("decoder_training"):
-        # TODO: move dropout to decoder_layer and apply for each layer
-        # Wrap the input RNN cells with dropout.
-        # cells = tf.contrib.rnn.DropoutWrapper(decoder_cells, output_keep_prob=keep_probability)
 
         # Training Helper. Embeds the target question sequence
         sequence_length = tf.reduce_sum(query_mask, axis=1)
@@ -85,7 +82,7 @@ def decoder_layer_training(decoder_input, decoder_cells, query_embedding, query_
         # Dynamic decoder, decoding step by step.
         logits, _, _ = tf.contrib.seq2seq.dynamic_decode(decoder, impute_finished=True,
                                                          maximum_iterations=16,
-                                                         parallel_iterations=16,
+                                                         parallel_iterations=max_parallel_dec,
                                                          swap_memory=True)
 
         # TODO: assert shape of logits
@@ -94,20 +91,19 @@ def decoder_layer_training(decoder_input, decoder_cells, query_embedding, query_
 
 def decoder_layer_inference(decoder_input, decoder_cells, word_vectors,
                             symbol_begin, symbol_end, max_query_length,
-                            output_layer, keep_probability, current_batch_size):
+                            output_layer, keep_probability, current_batch_size,
+                            max_parallel_dec):
     """
     Decoder layer for inference mode. Decodes hidden states received from an encoder layer, without
     using a target sequence (that is, the query)
     :return: logits of shape [batch_size, max_query_length, vocabulary_size]
     """
     with tf.name_scope("decoder_inference"):
-        # TODO: move dropout to decoder_layer and apply for each layer
-        # Wrap the input RNN cells with dropout.
-        # cells = tf.contrib.rnn.DropoutWrapper(decoder_cells, output_keep_prob=keep_probability)
 
         # Inference helper. Embeds the output of the decoder at each time step
         inference_helper = tf.contrib.seq2seq.GreedyEmbeddingHelper(word_vectors,
-                                                                    tf.fill([current_batch_size], symbol_begin),
+                                                                    tf.fill([current_batch_size],
+                                                                            symbol_begin),
                                                                     symbol_end)
 
         # The basic sampling decoder
@@ -116,7 +112,7 @@ def decoder_layer_inference(decoder_input, decoder_cells, word_vectors,
         # Dynamic decoder, decoding step by step.
         logits, _, _ = tf.contrib.seq2seq.dynamic_decode(decoder, impute_finished=True,
                                                          maximum_iterations=16,
-                                                         parallel_iterations=16,
+                                                         parallel_iterations=max_parallel_dec,
                                                          swap_memory=True)
 
         # TODO: assert shape of logits
@@ -126,7 +122,7 @@ def decoder_layer_inference(decoder_input, decoder_cells, word_vectors,
 def decoder_layer(encoder_states, encoder_output, query_embedding, query_mask, document, document_mask,
                   word_vectors, rnn_cell, max_query_length, vocab_size, gen_vocab_size, n_layers,
                   n_hidden_decoder, keep_probability, use_attention, use_copy_mechanism,
-                  symbol_begin_embedded, symbol_end_embedded, current_batch_size):
+                  symbol_begin_embedded, symbol_end_embedded, current_batch_size, max_parallel_dec):
     """
     The full decoder layer. Decodes the input (encoder hidden states of embedded document) and returns
     logits over the vocabulary that represent a query given the input paragraph/answer.
@@ -135,7 +131,7 @@ def decoder_layer(encoder_states, encoder_output, query_embedding, query_mask, d
     with tf.name_scope("decoder_layer"):
         # Defining the N layers for the decoder
         cells = [tf.contrib.rnn.DropoutWrapper(rnn_cell(n_hidden_decoder),
-                                               input_keep_prob=keep_probability) for _ in range(n_layers)]
+                 input_keep_prob=keep_probability) for _ in range(n_layers)]
         decoder_cells = tf.nn.rnn_cell.MultiRNNCell(cells)
 
         # Defining output layer (dense) for calculating logits over the vocabulary
@@ -163,21 +159,21 @@ def decoder_layer(encoder_states, encoder_output, query_embedding, query_mask, d
             zero_state = decoder_cells.zero_state(batch_size=current_batch_size, dtype=tf.float32)
             encoder_states = zero_state.clone(cell_state=encoder_states)
 
-            # In case copy mechanism is used, the output layer is defined internally in CopyNetWrapper
-            # so there is no need to pass it to BasicDecoder
+            # In case copy mechanism is used, the output layer is defined internally in
+            # CopyNetWrapper so there is no need to pass it to BasicDecoder
             output_layer = None
 
         with tf.variable_scope("decode"):
             logits_training = decoder_layer_training(encoder_states, decoder_cells,
                                                      query_embedding, query_mask,
                                                      max_query_length, output_layer,
-                                                     keep_probability)
+                                                     keep_probability, max_parallel_dec)
 
         with tf.variable_scope("decode", reuse=True):
             logits_inference = decoder_layer_inference(encoder_states, decoder_cells,
                                                        word_vectors, symbol_begin_embedded,
                                                        symbol_end_embedded, max_query_length,
                                                        output_layer, keep_probability,
-                                                       current_batch_size)
+                                                       current_batch_size, max_parallel_dec)
 
         return logits_training, logits_inference

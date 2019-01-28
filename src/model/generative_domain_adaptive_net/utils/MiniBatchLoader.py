@@ -17,16 +17,14 @@ class MiniBatchLoader:
         self.word_dictionary = word_dict
 
         self.max_query_length = max(list(map(lambda x: len(x[1]), self.questions)))
-        # TEMP DEBUGGING TODO: Change this once, dense layer problem is fixed
-        # self.max_document_length = 1024
-        # self.max_query_length = 62
-        # TEMP DEBUGGING
 
         # Normal behaviour, build bins according to the defined method
-        # Otherwise if we are predicting only, use only one bin
+        # Otherwise if we are predicting only, use only one bin for easier
+        # retrieval of data samples.
         if prediction_only is None:
             self.bins, self.max_document_length = self.build_bins(self.questions)
         else:  # Return a dict with the max document length and all question indices
+            self.max_document_length = 1024
             indices = [index for index, value in enumerate(self.questions)]
             self.bins = {self.max_document_length: indices}
 
@@ -110,6 +108,10 @@ class MiniBatchLoader:
         query_array = np.zeros(
             (current_batch_size, self.max_query_length),
             dtype='int32')
+        # target query words
+        target_query_array = np.zeros(
+            (current_batch_size, self.max_query_length),
+            dtype='int32')
         # document word mask
         document_mask_array = np.zeros(
             (current_batch_size, current_max_document_length),
@@ -130,13 +132,14 @@ class MiniBatchLoader:
         types = {}
 
         for n, question_index in enumerate(question_indices):
-            current_document, current_query, current_answer,\
+            current_document, current_query, current_target_query, current_answer,\
                 current_document_chars, current_query_chars, current_answer_start,\
                 current_answer_end, current_filename = self.questions[question_index]
 
             # document, query
             document_array[n, : len(current_document)] = np.array(current_document)
             query_array[n, : len(current_query)] = np.array(current_query)
+            target_query_array[n, : len(current_target_query)] = np.array(current_target_query)
 
             document_mask_array[n, : len(current_document)] = 1
             query_mask_array[n, : len(current_query)] = 1
@@ -204,4 +207,4 @@ class MiniBatchLoader:
 
         return document_array, document_character_array, query_array, query_character_array,\
             answer_array, document_mask_array, query_mask_array, answer_mask_array,\
-            type_character_array, type_character_mask, filenames
+            type_character_array, type_character_mask, target_query_array, filenames

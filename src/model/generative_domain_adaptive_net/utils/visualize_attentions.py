@@ -1,4 +1,4 @@
-from utils.SquadAnalysis import Analyser
+from utils.GAReaderAnalysis import Analyser
 
 analyser = Analyser()
 

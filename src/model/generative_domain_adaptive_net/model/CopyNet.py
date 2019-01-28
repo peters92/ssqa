@@ -72,6 +72,7 @@ class CopyNetWrapper(tf.nn.rnn_cell.RNNCell):
         outputs, cell_state = self._cell(inputs, cell_state, scope)
         generate_score = self._projection(outputs)
 
+        # with tf.device("/cpu:0"):
         copy_score = tf.einsum("ijk,km->ijm", self._encoder_states, self._copy_weight)
         copy_score = tf.nn.tanh(copy_score)
 

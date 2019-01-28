@@ -2,7 +2,9 @@
 Simple seq2seq architecture for testing.
 """
 import tensorflow as tf
+import numpy as np
 from tensorflow.contrib.rnn import GRUCell as GRU
+from tensorflow.contrib.cudnn_rnn import CudnnGRU
 import time
 import os
 import logging
@@ -10,18 +12,18 @@ from tqdm import trange
 from model.seq2seq_model_helpers import encoder_layer,\
                                         bidirectional_encoder_layer, \
                                         decoder_layer
-from utils.Helpers import SYMB_BEGIN,\
-                          SYMB_END,\
-                          GEN_VOCAB_SIZE,\
-                          MAX_WORD_LEN
+from utils.Helpers import batch_splitter,\
+                          SYMB_BEGIN,\
+                          SYMB_END
 from nltk.tokenize.moses import MosesDetokenizer
 
 
 
 class Seq2Seq:
     def __init__(self, n_layers, dictionaries, vocab_size, n_hidden_encoder,
-                 n_hidden_decoder, embed_dim, train_emb, answer_injection, batch_size, use_bi_encoder,
-                 use_attention, use_copy_mechanism):
+                 n_hidden_decoder, embed_dim, train_emb, answer_injection, batch_size,
+                 use_bi_encoder, use_attention, use_copy_mechanism, max_parallel_dec,
+                 gen_vocab_size, use_cudnn_gru):
         # Input variables
         self.n_hidden_encoder = n_hidden_encoder  # Number of hidden units in encoder
         self.n_hidden_decoder = n_hidden_decoder  # Number of hidden units in decoder
@@ -32,13 +34,15 @@ class Seq2Seq:
 
         self.word_dictionary = dictionaries[0]  # The word dictionary, used in accuracy
         self.vocab_size = vocab_size            # Size of the word vocabulary (unique word tokens)
-        self.gen_vocab_size = GEN_VOCAB_SIZE    # TODO: explain this
+        self.gen_vocab_size = gen_vocab_size    # Vocab size for copy mechanism
         self.symbol_begin = self.word_dictionary[SYMB_BEGIN]  # Integer of start of sequence mark
         self.symbol_end = self.word_dictionary[SYMB_END]  # Integer of start of sequence mark
         self.answer_injection = answer_injection
         self.use_bi_encoder = use_bi_encoder
         self.use_attention = use_attention
         self.use_copy_mechanism = use_copy_mechanism
+        self.use_cudnn_gru = use_cudnn_gru
+        self.max_parallel_dec = max_parallel_dec
 
         # If a bidirectional encoder is used, then make sure the decoder has twice the units
         # to match the concatenated encoder state size (which is 2 * n_hidden_encoder)
@@ -49,6 +53,7 @@ class Seq2Seq:
         # See their explanation below in the build_graph() method
         self.document = None
         self.query = None
+        self.target_query = None
         self.answer = None
         self.answer_mask = None
         self.document_mask = None
@@ -60,19 +65,13 @@ class Seq2Seq:
         self.updates = None
         # Accuracy and Loss measures
         self.loss = None                    # The categorical cross-entropy loss
-        self.EM_accuracy = None                # The exact match (EM) accuracy
+        self.perplexity = None              # The per-word perplexity (e^(seq_loss_by_example))
 
         # Tensorboard variables
         # Used to report accuracy and loss values to tensorboard during training/validation
-        # Exact Match
-        self.em_acc_metric = None
-        self.em_acc_metric_update = None
-        self.em_valid_acc_metric = None
-        self.em_valid_acc_metric_update = None
 
         self.loss_summ = None
-        self.em_acc_summ = None
-        self.em_valid_acc_summ = None
+        self.perplexity_summ = None
         self.merged_summary = None
 
     def build_graph(self, grad_clip, embed_init, seed, max_doc_len, max_qry_len):
@@ -85,6 +84,9 @@ class Seq2Seq:
         # document or query in the current batch.
         self.document = tf.placeholder(tf.int32, [None, None], name="document")  # Document words
         self.query = tf.placeholder(tf.int32, [None, None], name="query")  # Query words
+        # Define the target query sequence, which is the same as the query but shifted:
+        # Query: [SYMBOL_BEGIN, 1, 2, 3, SYMBOL_END] Target Query: [1, 2, 3, SYMBOL_END, SYMBOL_PAD]
+        self.target_query = tf.placeholder(tf.int32, [None, None], name='target_query')
         # Placeholder for the ground truth answer's index in the document.
         # A tensor of shape [batch_size, 2]
         # The values refer to the answer's index in the document. Can be either the index among
@@ -159,20 +161,22 @@ class Seq2Seq:
         #
 
         # Creating the variable for the word_vectors
-        if embed_init is None:  # If there are no pre-trained word vectors
-            word_vectors = tf.get_variable(
-                "word_vectors", [self.vocab_size, self.embed_dim],
-                initializer=tf.glorot_normal_initializer(seed, tf.float32),
-                trainable=self.train_emb)
-        else:  # Else, we use the pre-trained word-vectors
-            word_vectors = tf.Variable(embed_init, trainable=self.train_emb,
-                                       name="word_vectors")
+        # Embeddings are not supported on GPU, so placing on CPU to save memory
+        with tf.device("/cpu:0"):
+            if embed_init is None:  # If there are no pre-trained word vectors
+                word_vectors = tf.get_variable(
+                    "word_vectors", [self.vocab_size, self.embed_dim],
+                    initializer=tf.glorot_normal_initializer(seed, tf.float32),
+                    trainable=self.train_emb)
+            else:  # Else, we use the pre-trained word-vectors
+                word_vectors = tf.Variable(embed_init, trainable=self.train_emb,
+                                           name="word_vectors")
 
-        # Embedding the document and query in the above word_vectors
-        document_embedding = tf.nn.embedding_lookup(
-            word_vectors, self.document, name="document_embedding")
-        query_embedding = tf.nn.embedding_lookup(
-            word_vectors, self.query, name="query_embedding")
+            # Embedding the document and query in the above word_vectors
+            document_embedding = tf.nn.embedding_lookup(
+                word_vectors, self.document, name="document_embedding")
+            query_embedding = tf.nn.embedding_lookup(
+                word_vectors, self.query, name="query_embedding")
 
         # # Assert embedding shapes are [None, max_length, embedding_dimensions]
         # assert document_embedding.shape.as_list() == [None, max_doc_len, self.embed_dim],\
@@ -196,15 +200,17 @@ class Seq2Seq:
         # -----------------------------------------
         #               Encoder Layer
         # -----------------------------------------
+        rnn_cell = GRU
 
         # Pass the document to the encoder layer (either bidirectional or unidirectional)
         if self.use_bi_encoder:
             encoder_output, encoder_states = \
-                bidirectional_encoder_layer(GRU, self.n_layers, self.document_mask, document_embedding,
-                                            self.n_hidden_encoder, max_doc_len, self.keep_prob)
+                bidirectional_encoder_layer(rnn_cell, self.n_layers, self.document_mask,
+                                            document_embedding, self.n_hidden_encoder,
+                                            max_doc_len, self.keep_prob)
         else:  # Use unidirectional encoder
             encoder_output, encoder_states = \
-                encoder_layer(GRU, self.n_layers, self.document_mask, document_embedding,
+                encoder_layer(rnn_cell, self.n_layers, self.document_mask, document_embedding,
                               self.n_hidden_encoder, max_doc_len, self.keep_prob)
 
         current_batch_size = tf.to_int32(tf.shape(self.query)[0])
@@ -212,18 +218,23 @@ class Seq2Seq:
         logits_training, logits_inference = decoder_layer(encoder_states, encoder_output,
                                                           query_embedding, self.query_mask,
                                                           self.document,
-                                                          self.document_mask, word_vectors, GRU,
+                                                          self.document_mask, word_vectors,
+                                                          rnn_cell,
                                                           max_qry_len, self.vocab_size,
                                                           self.gen_vocab_size,
                                                           self.n_layers, self.n_hidden_decoder,
                                                           self.keep_prob, self.use_attention,
                                                           self.use_copy_mechanism, self.symbol_begin,
-                                                          self.symbol_end, current_batch_size)
+                                                          self.symbol_end, current_batch_size,
+                                                          self.max_parallel_dec)
 
         # Getting the output from the decoder layer
         # RNN output is the full logit vector for each timestep
-        # sample_id is the argmax of the logit for each timestep, that is, an index which can be passed
+        # shape [batch_size, sequence_length, vocabulary_size] TODO: ASSERT THIS
+        # sample_id is the argmax of the logit for each timestep,
+        # that is, an index which can be passed
         # through an inverse word dictionary to see the predicted/generated words.
+        # shape [batch_size, sequence_length] TODO: ASSERT THIS TOO
         logits_training = tf.identity(logits_training.rnn_output, name="logits")
         sample_ids_inference = tf.identity(logits_inference.sample_id, name="predictions")
         self.prediction = sample_ids_inference
@@ -231,27 +242,23 @@ class Seq2Seq:
         # -----------
         #    LOSS
         # -----------
+
         # Cast and query mask as float32 for loss calculation
         query_mask_float = tf.cast(self.query_mask, dtype=tf.float32)
 
-        # Slice query and query_mask to match first two dimensions with logits
-        # Get the current size of logits' second dimension and the current batch size
+        # Slice target_query and query_mask to match first two dimensions with logits
+        # Get the current size of logits' second dimension (seq. length)
         logits_shape_1 = tf.to_int32(tf.shape(logits_training)[1])
-        # batch_size = tf.to_int32(tf.shape(query_mask_float)[0])
         # Perform the slice
         query_mask_sliced = tf.slice(query_mask_float, [0, 0], [current_batch_size, logits_shape_1])
-        query_sliced = tf.slice(self.query, [0, 0], [current_batch_size, logits_shape_1])
+        query_sliced = tf.slice(self.target_query, [0, 0], [current_batch_size, logits_shape_1])
 
         with tf.name_scope("seq2seq_loss"):
             self.loss = tf.contrib.seq2seq.sequence_loss(logits_training,
                                                          query_sliced,
                                                          query_mask_sliced)
 
-        # -------------------
-        #      ACCURACY
-        # -------------------
-
-        # TODO: code this up, probably some sort of f1 score between generated query and actual
+            self.perplexity = tf.exp(self.loss)
 
         # Define Optimizer
         vars_list = tf.trainable_variables()
@@ -265,23 +272,25 @@ class Seq2Seq:
         self.save_vars()
 
         # Tensorboard summaries
-        # TODO: keep this for now, will check later if it can stay for seq2seq
-        # self.em_acc_summ = tf.summary.scalar('exact_match_accuracy', self.em_acc_metric_update)
         self.loss_summ = tf.summary.scalar('seq2seq_loss', self.loss)
-        # self.merged_summary = tf.summary.merge_all()
-        # self.em_valid_acc_summ = tf.summary.scalar('em_valid_acc_metric',
-        #                                            self.em_valid_acc_metric_update)
+        self.perplexity_summ = tf.summary.scalar('seq2seq_perplexity', self.perplexity)
+        self.merged_summary = tf.summary.merge_all()
 
     def save_vars(self):
         """
         for restoring model
         """
         tf.add_to_collection('document', self.document)
-        tf.add_to_collection('answer', self.answer)
         tf.add_to_collection('document_mask', self.document_mask)
+        tf.add_to_collection('query', self.query)
+        tf.add_to_collection('target_query', self.target_query)
+        tf.add_to_collection('query_mask', self.query_mask)
+        tf.add_to_collection('answer', self.answer)
+        tf.add_to_collection('answer_mask', self.answer_mask)
         tf.add_to_collection('keep_prob', self.keep_prob)
         tf.add_to_collection('loss', self.loss)
-        tf.add_to_collection('accuracy', self.EM_accuracy)
+        tf.add_to_collection('perplexity', self.perplexity)
+        tf.add_to_collection('prediction', self.prediction)
         tf.add_to_collection('updates', self.updates)
         tf.add_to_collection('learning_rate', self.learning_rate)
 
@@ -291,9 +300,10 @@ class Seq2Seq:
         """
         document_array, document_character_array, query_array, query_character_array,\
             answer_array, document_mask_array, query_mask_array, answer_mask_array,\
-            type_character_array, type_character_mask, filenames = training_data
+            type_character_array, type_character_mask, target_query_array, filenames = training_data
 
         feed_dict = {self.document: document_array, self.query: query_array,
+                     self.target_query: target_query_array,
                      self.answer: answer_array, self.document_mask: document_mask_array,
                      self.query_mask: query_mask_array, self.keep_prob: 1 - dropout,
                      self.learning_rate: learning_rate}
@@ -310,16 +320,12 @@ class Seq2Seq:
         else:  # Otherwise, get regular updates
             # run_options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
             # run_metadata = tf.RunMetadata()
+            run_options = tf.RunOptions(report_tensor_allocations_upon_oom=True)
             loss, updates, summaries = \
-                sess.run([self.loss, self.updates, self.loss_summ], feed_dict)
-                         # options=run_options,
-                         # run_metadata=run_metadata)
+                sess.run([self.loss, self.updates, self.merged_summary], feed_dict,
+                         options=run_options)
             # writer.add_run_metadata(run_metadata, "step{}".format(epoch*max_it+iteration))
             writer.add_summary(summaries, int(epoch*max_it+iteration))
-        # Calculate F1 Score and Exact Match accuracy over the batch
-        # f1_score, exact_match_accuracy = calculate_accuracies(answer_array, predicted_answer_array,
-        #                                                       document_array, self.word_dictionary)
-
         # return loss, f1_score, exact_match_accuracy, updates
         return loss, updates
 
@@ -330,128 +336,152 @@ class Seq2Seq:
         """
         Validate/Test the model
         """
-        it = loss = em_accuracy = f1_score = n_example = 0
+        it = loss = 0
 
         # Text predictions for inference
         prediction_text = []
 
         tr = trange(
             len(valid_batch_loader),
-            desc="loss: {:.3f}, EM_accuracy: {:.3f}, F1_accuracy: {:.3f}".format(0.0, 0.0, 0.0),
+            desc="Loss: {:.3f}, Perplexity: {:.3f}".format(0.0, 0.0, 0.0),
             leave=False,
             ascii=True)
         start_time = time.time()
         for validation_data in valid_batch_loader:
             it += 1
-            document_array, document_character_array, query_array, query_character_array,\
-                answer_array, document_mask_array, query_mask_array, answer_mask_array,\
-                type_character_array, type_character_mask, filenames = validation_data
+            total_seq_length = np.sum(validation_data[5])
 
-            feed_dict = {self.document: document_array, self.query: query_array,
-                         self.answer: answer_array, self.document_mask: document_mask_array,
-                         self.query_mask: query_mask_array, self.keep_prob: 1.,
-                         self.learning_rate: 0.}
+            if total_seq_length > 8700:
+                batch_split_1, batch_split_2 = batch_splitter(validation_data)
+                validation_data = [batch_split_1, batch_split_2]
+            else:
+                validation_data = [validation_data]  # Wrap it in list for loop
 
-            # Feature marking the answer words in the document
-            if self.answer_injection:
-                feed_dict[self.answer_mask] = answer_mask_array
+            for validation_batch in validation_data:
+                document_array, document_character_array, query_array, query_character_array,\
+                    answer_array, document_mask_array, query_mask_array, answer_mask_array,\
+                    type_character_array, type_character_mask, target_query_array, filenames = validation_batch
 
-            loss_, prediction = \
-                sess.run([self.loss, self.prediction], feed_dict)
+                feed_dict = {self.document: document_array, self.query: query_array,
+                             self.target_query: target_query_array,
+                             self.answer: answer_array, self.document_mask: document_mask_array,
+                             self.query_mask: query_mask_array, self.keep_prob: 1.,
+                             self.learning_rate: 0.}
 
-            # Run current document, query and generated query through inverse word-dictionary
-            # for printing at end of validation
-            current_prediction = [[inverse_word_dictionary[word_value] for word_value in row]
-                                  for row in prediction]
-            current_document = [[inverse_word_dictionary[word_value] for word_value in row]
-                                for row in document_array]
-            current_query = [[inverse_word_dictionary[word_value] for word_value in row]
-                             for row in query_array]
+                # Feature marking the answer words in the document
+                if self.answer_injection:
+                    feed_dict[self.answer_mask] = answer_mask_array
 
-            prediction_text.append([current_document, current_query, current_prediction])
+                try:
+                    loss_, prediction = \
+                        sess.run([self.loss, self.prediction], feed_dict)
+                except tf.errors.ResourceExhaustedError:
+                    print("GPU out of memory during validation."
+                          " Total sequence length in batch was {},"
+                          "Skipping batch...".format(total_seq_length))
+                    continue
 
-            # Calculate F1 Score and Exact Match accuracy over the batch
-            # f1_score_, exact_match_accuracy_ = \
-            #     calculate_accuracies(answer_array, predicted_answer_array,
-            #                          document_array, self.word_dictionary)
+                # Run current document, query and generated query through inverse word-dictionary
+                # for printing at end of validation
+                current_prediction = [[inverse_word_dictionary[word_value] for word_value in row]
+                                      for row in prediction]
+                current_document = [[inverse_word_dictionary[word_value] for word_value in row]
+                                    for row in document_array]
+                current_target_query = [[inverse_word_dictionary[word_value] for word_value in row]
+                                        for row in target_query_array]
+                current_query = [[inverse_word_dictionary[word_value] for word_value in row]
+                                 for row in query_array]
 
-            n_example += document_array.shape[0]
+                # print("Answer array: {}".format(answer_array))
+                # print("Document: {}".format(current_document))
+                current_answer = []
+                for index, row in enumerate(current_document):
+                    answer_start = answer_array[index, 0]
+                    answer_end = answer_array[index, 1]
+                    current_answer.append(row[answer_start:answer_end+1])
 
-            loss += loss_
-            # em_accuracy += exact_match_accuracy_
-            # f1_score += f1_score_
-            # tr.set_description("loss: {:.3f}, EM_accuracy: {:.3f}, F1_Score: {:.3f}".
-            #                    format(loss_, exact_match_accuracy_, f1_score_))
-            tr.update()
+                prediction_text.append([current_document, current_target_query,
+                                        current_query, current_prediction, current_answer])
 
+                loss += loss_
+                current_perplexity = np.exp(loss_)
+                tr.set_description("Loss: {:.3f}, Perplexity: {:.3f}".
+                                   format(loss_, current_perplexity))
+                tr.update()
         tr.close()
-        # if writer is not None:
-        #     writer.add_summary(em_valid_acc_summary, (epoch * max_it + iteration))
 
-        loss /= n_example
-        em_accuracy /= it
-        f1_score /= it
+        loss /= it
+        perplexity = np.exp(loss)
         time_spent = (time.time() - start_time) / 60
-        statement = "loss: {:.3f}, EM_Acc: {:.3f}, F1_Score: {:.3f}, time: {:.1f}(m)" \
-            .format(loss, em_accuracy, f1_score, time_spent)
+        statement = "loss: {:.3f}, perplexity: {:.3f} time: {:.1f}(m)" \
+            .format(loss, perplexity, time_spent)
         logging.info(statement)
         # Logging example document, ground truth question and generated question
         detokenizer = MosesDetokenizer()
 
+        # Print the first 10% of predictions for the validation set
         for i in range(int(len(prediction_text)/10)):
             doc = prediction_text[i][0][0]
             doc = [word for word in doc if word != "@pad"]
-            qry = prediction_text[i][1][0]
+            # tgt_qry = prediction_text[i][1][0]
+            # tgt_qry = [word for word in tgt_qry if word != "@pad"]
+            qry = prediction_text[i][2][0]
             qry = [word for word in qry if word != "@pad"]
-            gen_qry = prediction_text[i][2][0]
+            gen_qry = prediction_text[i][3][0]
+            ans = prediction_text[i][4][0]
             doc = detokenizer.detokenize(doc, return_str=True)
+            # tgt_qry = detokenizer.detokenize(tgt_qry, return_str=True)
             qry = detokenizer.detokenize(qry, return_str=True)
             gen_qry = detokenizer.detokenize(gen_qry, return_str=True)
+            ans = detokenizer.detokenize(ans, return_str=True)
 
-            logging.info("\n Document: {}\n".format(doc))
-            logging.info("\n Query: {}".format(qry))
-            logging.info("\n Generated query: {}".format(gen_qry))
+            logging.info("Document: {}".format(doc))
+            # logging.info("Target Query: {}".format(tgt_qry))
+            logging.info("Answer: {}".format(ans))
+            logging.info("Query: {}".format(qry))
+            logging.info("Generated query: {}\n".format(gen_qry))
 
-        return loss, em_accuracy, f1_score
+        return loss, perplexity
 
-    def predict(self, sess, batch_loader):
+    def predict(self, sess, batch_loader, unlabeled=True):
 
         output = []
+        tr = trange(
+            len(batch_loader), leave=False, ascii=True)
         for samples in batch_loader:
             document_array, document_character_array, query_array, query_character_array,\
                 answer_array, document_mask_array, query_mask_array, answer_mask_array,\
-                type_character_array, type_character_mask, filenames = samples
+                type_character_array, type_character_mask, target_query_array, filenames = samples
 
             feed_dict = {self.document: document_array, self.query: query_array,
-                         self.document_char: document_character_array,
-                         self.query_char: query_character_array,
+                         self.target_query: target_query_array,
                          self.answer: answer_array, self.document_mask: document_mask_array,
-                         self.query_mask: query_mask_array, self.token: type_character_array,
-                         self.char_mask: type_character_mask, self.keep_prob: 1.,
-                         self.learning_rate: 0.}
+                         self.query_mask: query_mask_array,
+                         self.keep_prob: 1., self.learning_rate: 0.}
 
             # Feature marking the answer words in the document
             if self.answer_injection:
                 feed_dict[self.answer_mask] = answer_mask_array
 
-            document, query, answer,\
-                predicted_answer, answer_start_probabilities,\
-                answer_end_probabilities, attention_tensors = \
-                sess.run([self.document, self.query, self.answer,
-                          self.predicted_answer, self.start_probabilities,
-                          self.end_probabilities, self.attention_tensors], feed_dict)
-            output.append((document, query, answer,
-                           predicted_answer, answer_start_probabilities,
-                           answer_end_probabilities, attention_tensors))
+            document, query, answer, prediction = \
+                sess.run([self.document, self.query, self.answer, self.prediction], feed_dict)
+            if unlabeled:  # Only return the prediction and the respective question IDs
+                output.append((prediction, filenames))
+            else:
+                output.append((document, query, answer, prediction, filenames))
+
+            tr.update()
+        tr.close()
 
         return output
 
-    def restore(self, sess, checkpoint_dir, epoch):
+    def restore(self, sess, checkpoint_dir, model_name, epoch):
         """
         restore model
         """
+        model = '{}_epoch{}.ckpt'.format(model_name, epoch)
         checkpoint_path = os.path.join(checkpoint_dir,
-                                       'model_epoch{}.ckpt'.format(epoch))
+                                       model)
 
         print("\nRestoring model from: {}\n".format(checkpoint_path))
 
@@ -460,16 +490,20 @@ class Seq2Seq:
         logging.info("model restored from {}".format(checkpoint_path))
         # restore variables from checkpoint
         self.document = tf.get_collection('document')[0]
-        self.answer = tf.get_collection('answer')[0]
         self.document_mask = tf.get_collection('document_mask')[0]
+        self.target_query = tf.get_collection('target_query')[0]
+        self.query = tf.get_collection('query')[0]
         self.query_mask = tf.get_collection('query_mask')[0]
+        self.answer = tf.get_collection('answer')[0]
+        self.answer_mask = tf.get_collection('answer_mask')[0]
         self.keep_prob = tf.get_collection('keep_prob')[0]
         self.loss = tf.get_collection('loss')[0]
-        self.EM_accuracy = tf.get_collection('accuracy')[0]
+        self.perplexity = tf.get_collection('perplexity')[0]
+        self.prediction = tf.get_collection('prediction')[0]
         self.updates = tf.get_collection('updates')[0]
         self.learning_rate = tf.get_collection('learning_rate')[0]
 
-    def save(self, sess, saver, checkpoint_dir, epoch):
-        checkpoint_path = os.path.join(checkpoint_dir, 'model_epoch{}.ckpt'.format(epoch))
+    def save(self, sess, saver, checkpoint_dir, model_name, epoch):
+        checkpoint_path = os.path.join(checkpoint_dir, '{}_epoch{}.ckpt'.format(model_name, epoch))
         saver.save(sess, checkpoint_path)
         logging.info("model saved to {}".format(checkpoint_path))

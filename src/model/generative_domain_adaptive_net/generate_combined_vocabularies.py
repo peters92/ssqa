@@ -8,7 +8,7 @@ data_dir = "/scratch/s161027/ga_reader_data/ssqa_processed"
 unlabeled_dataset = "small"
 dataset_files = {"small": "unlabeled-data.small",
                  "large": "unlabeled-data.large"}
-training_sets = ["0.2", "0.5", "0.9"]
+training_sets = ["0.1", "0.2", "0.5", "0.9"]
 
 for training_set in training_sets:
     vocab_filename = "vocab_training"+training_set+"+"+"unlabeled_"+unlabeled_dataset+".bin"

@@ -45,13 +45,13 @@ def get_args():
                         help='whether to perform initial test')
     parser.add_argument('--model_name', type=str, default="model_{}".format(datetime.now().isoformat()),
                         help='Name of the model, used in saving logs and checkpoints')
-    parser.add_argument('--data_dir', type=str, default='/scratch/s161027/ga_reader_data/squad',
+    parser.add_argument('--data_dir', type=str, default='/scratch/s161027/ga_reader_data/ssqa',
                         help='data directory containing input')
     parser.add_argument('--log_dir', type=str,
-                        default='/scratch/s161027/run_data/SQUAD/temp_test_delete/log',
+                        default='/scratch/s161027/run_data/SSQA/GA_READER/log',
                         help='directory containing tensorboard logs')
     parser.add_argument('--save_dir', type=str,
-                        default='/scratch/s161027/run_data/SQUAD/temp_test_delete/saved_models',
+                        default='/scratch/s161027/run_data/SSQA/GA_READER/saved_models',
                         help='directory to store checkpointed models')
     parser.add_argument('--embed_file', type=str,
                         default='/scratch/s161027/ga_reader_data/word2vec_glove.txt',
@@ -64,10 +64,10 @@ def get_args():
                         help='number of layers of the model')
     parser.add_argument('--batch_size', type=int, default=32,
                         help='mini-batch size')
-    parser.add_argument('--n_epoch', type=int, default=100,
+    parser.add_argument('--n_epoch', type=int, default=10,
                         help='number of epochs')
-    parser.add_argument('--eval_every', type=int, default=2451,
-                        help='evaluation frequency')  # eval every 2451
+    parser.add_argument('--eval_per_epoch', type=int, default=2,
+                        help='Evaluation frequency. 1 = once per epoch, at the end of the epoch.')
     parser.add_argument('--print_every', type=int, default=50,
                         help='print frequency')
     parser.add_argument('--grad_clip', type=float, default=10,
@@ -92,10 +92,6 @@ def train(args):
     use_chars = args.char_dim > 0
     # Initialize session early to reserve GPU memory
     sess = tf.Session()
-
-    if not os.path.exists(os.path.join(args.data_dir, "training")):
-        # Parsing SQuAD data set
-        squad_parser()
 
     # Processing .question files and loading into memory (data in lists and tuples)
     dp = DataPreprocessor()
@@ -181,6 +177,9 @@ def train(args):
         learning_rate = args.init_learning_rate
         epoch_range = tqdm(range(args.n_epoch), leave=True, ascii=True, ncols=100)
         max_it = len(train_batch_loader)
+        eval_every = max_it // args.eval_per_epoch  # How often to validate
+        eval_list = list(range(eval_every, max_it + 1, eval_every))  # List of validation points
+        eval_list[-1] = max_it  # To make sure validation happens exactly at the end of the epoch
 
         # Initialize lists for pickle dump of stats
         train_dict_dump = {"train_em_acc": [],
@@ -257,8 +256,7 @@ def train(args):
                     start_time = time.time()
 
                 # Validate, and save model
-                if it % args.eval_every == 0 or \
-                        it % max_it == 0:
+                if it in eval_list:
                     # Reinitialize streaming accuracy metric for each validation
                     running_vars = tf.get_collection(
                         tf.GraphKeys.LOCAL_VARIABLES,

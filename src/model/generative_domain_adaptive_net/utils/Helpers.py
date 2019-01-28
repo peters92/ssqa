@@ -6,7 +6,6 @@ import re
 
 EMBED_DIM = 128
 MAX_WORD_LEN = 10
-GEN_VOCAB_SIZE = 100
 SYMB_PLACEHOLDER = "@placeholder"
 SYMB_BEGIN = "@begin"
 SYMB_END = "@end"
@@ -132,80 +131,6 @@ def calculate_accuracies(answer_array, predicted_answer_array, document_array, w
 
     return f1_score_batch, exact_match_batch
 
-# def calculate_f1_score(answer_array, predicted_answer_array, document_mask):
-#     """
-#     This method calculates the F1 score over the input batch.
-#     Inputs:
-#     answer_array - The start and end indices of the ground truth answers
-#     predicted_answer_array - The start and end indices of the predicted answers
-#     document_mask - The mask of document tokens over the current batch of documents
-#     Output:
-#     f1_score - The harmonic mean of precision and recall over the current batch, where:
-#     Precision = True Positives / (True Positives + False Positives)
-#     Recall    = True Positives / (True Positives + False negatives)
-#     f1_score  = 2 * (Precision * Recall) / (Precision + Recall)
-#     """
-#     # Initialize counters for true positives, false positives and false negatives
-#     TP = FP = FN = 0
-#
-#     # Loop over the current batch examples
-#     for i in range(answer_array.shape[0]):
-#         current_answer_indices = answer_array[i]
-#         current_prediction_indices = predicted_answer_array[i]
-#
-#         # Create answer and prediction masks
-#         answer_mask = np.zeros(shape=(document_mask.shape[1]))
-#         answer_mask[current_answer_indices[0]:current_answer_indices[1] + 1] = 1
-#
-#         # TODO: Check if this works as intended in logged accuracies
-#         # If prediction end index is lower than start, flip them around
-#         if current_prediction_indices[1] < current_prediction_indices[0]:
-#             current_prediction_indices[0], current_prediction_indices[1] = \
-#                 current_prediction_indices[1], current_prediction_indices[0]
-#
-#         prediction_mask = np.zeros(shape=(document_mask.shape[1]))
-#         prediction_mask[current_prediction_indices[0]:current_prediction_indices[1] + 1] = 1
-#
-#         # Calculate TP, FP and FN for the current example in the batch
-#         # True Positives, the count of overlapping 1's in answer and prediction
-#         current_TP = np.count_nonzero(prediction_mask * answer_mask)
-#         # False Positives, the count of indices where predictions is 1 but answer is 0
-#         current_FP = np.count_nonzero(prediction_mask * (answer_mask - 1))
-#         # False Negatives, the count of indices where prediction is 0 but answer is 1
-#         current_FN = np.count_nonzero((prediction_mask - 1) * answer_mask)
-#
-#         # Increment counters for the whole batch
-#         TP += current_TP
-#         FP += current_FP
-#         FN += current_FN
-#
-#     # Calculate precision and recall over the whole batch
-#     # If conditions are for handling zero division cases
-#     # TODO: Print answer and prediction mask when one of these conditions is true
-#     if (TP + FP) == 0:
-#         print("\nTP+FP is 0!")
-#         print("Answer and Prediction indices of current batch: {}\n{}\n{:-^100}".format(
-#             answer_array, predicted_answer_array, " End of example "))
-#         precision = 0
-#     else:
-#         precision = TP / (TP + FP)
-#
-#     if (TP + FN) == 0:
-#         print("\nTP+FN is 0!")
-#         print("Answer and Prediction indices of current batch: {}\n{}\n{:-^100}".format(
-#             answer_array, predicted_answer_array, " End of example "))
-#         recall = 0
-#     else:
-#         recall = TP / (TP + FN)
-#
-#     # Calculate F1 score
-#     if (precision + recall) == 0:
-#         f1_score = 0
-#     else:
-#         f1_score = 2 * (precision * recall) / (precision + recall)
-#
-#     return f1_score
-
 
 def load_word2vec_embeddings(dictionary, vocab_embed_file):
     if vocab_embed_file is None:
@@ -248,3 +173,21 @@ def check_dir(*args, exit_function=False):
                 os.makedirs(dir_)
             else:
                 raise ValueError("{} does not exist!".format(dir_))
+
+
+def batch_splitter(batched_data):
+    """
+    This method splits the input batch in two and returns the split as a tuple.
+    The purpose of the method is to help the training/validation process when it
+    exhausts the GPU memory with too large information. The split batch can be fed
+    to the model again.
+    :param batched_data: This can be a batch of training/validation/test data
+    :return: tuple of split batched data
+    """
+    batch_split_1, batch_split_2 = [], []
+    batch_size_split = batched_data[0].shape[0]//2
+    for arrays in batched_data:
+        batch_split_1.append(arrays[0:batch_size_split])
+        batch_split_2.append(arrays[batch_size_split:])
+
+    return batch_split_1, batch_split_2
